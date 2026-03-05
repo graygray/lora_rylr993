@@ -399,8 +399,23 @@ def run_client(args):
     last_frame = None
     rx_delay_s = args.rx_delay_ms / 1000.0
     busy_tail_s = max(0.0, args.busy_tail_ms / 1000.0)
+    
+    # Store the timeout threshold (e.g. 5 missed frames)
+    # If using --auto-role, we allow failover. If strictly --client, we might just wait.
+    # Let's provide a basic failover for --auto-role users.
+    failover_timeout_s = args.frame * 5.0  # 5 frames of silence
+    last_beacon_mono = time.monotonic()
 
     while True:
+        # Check for failover if acting as a client under --auto-role
+        if args.auto_role and time.monotonic() - last_beacon_mono > failover_timeout_s:
+            if verbose:
+                print(f"[!] No beacons for {failover_timeout_s:.1f}s. Server died! Commencing Failover...")
+            ser.close()
+            print("====== Switching to SERVER mode (Failover) ======")
+            run_server(args)
+            return  # run_server handles the infinite loop from here
+
         line = ser.readline().decode(errors="ignore").strip()
         if not line:
             continue
@@ -427,6 +442,9 @@ def run_client(args):
         beacon_rx_m = read_m - rx_delay_s
         tx_time = beacon_rx_m + args.base_delay + (args.robotid - 1) * args.slot + args.tx_offset
         now_m = time.monotonic()
+        
+        # Keep track of the last time we heard a valid beacon
+        last_beacon_mono = now_m
         
         if now_m > tx_time + 0.03:
             if verbose:
