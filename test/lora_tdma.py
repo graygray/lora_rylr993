@@ -401,12 +401,13 @@ def run_client(args):
     busy_tail_s = max(0.0, args.busy_tail_ms / 1000.0)
     
     # Store the timeout threshold (e.g. 5 missed frames)
-    # If using --auto-role, we allow failover. If strictly --client, we might just wait.
     # To prevent multiple robots from becoming Server at the exact same moment,
     # we add a staggered delay based on their robotid. 
-    # Robot 2 waits base + 0s. Robot 3 waits base + 2s. Robot 4 waits base + 4s, etc.
+    # Robot 2 waits base + 0s. Robot 3 waits base + 6s. Robot 4 waits base + 12s, etc.
+    # We need a large stagger because the LoRa module takes ~5 seconds to Soft Reset (ATZ) 
+    # and reconfigure itself as a Master before it can send the first beacon!
     base_failover_s = args.frame * 5.0
-    stagger_delay_s = (args.robotid - 2) * 2.5 if args.robotid >= 2 else 0.0
+    stagger_delay_s = (args.robotid - 2) * 6.0 if args.robotid >= 2 else 0.0
     failover_timeout_s = base_failover_s + stagger_delay_s
     
     last_beacon_mono = time.monotonic()
@@ -443,6 +444,10 @@ def run_client(args):
         if not (data.startswith("BCN") and len(data) >= 7):
             continue
 
+        # If we reach here, we got a valid beacon!
+        # Reset our failover watchdog so we don't promote ourselves
+        last_beacon_mono = time.monotonic()
+
         try:
             frame = int(data[3:7])
         except:
@@ -456,9 +461,6 @@ def run_client(args):
         beacon_rx_m = read_m - rx_delay_s
         tx_time = beacon_rx_m + args.base_delay + (args.robotid - 1) * args.slot + args.tx_offset
         now_m = time.monotonic()
-        
-        # Keep track of the last time we heard a valid beacon
-        last_beacon_mono = now_m
         
         if now_m > tx_time + 0.03:
             if verbose:
