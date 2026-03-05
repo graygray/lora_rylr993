@@ -198,7 +198,7 @@ def main():
     ap.add_argument("--robots", required=True)
 
     ap.add_argument("--frame", type=float, default=2.0)
-    ap.add_argument("--slot", type=float, default=0.15)
+    ap.add_argument("--slot", type=float, default=0.1)
     ap.add_argument("--base-delay", type=float, default=0.25)
     ap.add_argument("--tx-offset", type=float, default=0.02)
 
@@ -206,7 +206,7 @@ def main():
     ap.add_argument("--print-interval", type=int, default=20)
     ap.add_argument("--margin", type=float, default=0.03)
     ap.add_argument("--auto", action="store_true")
-    ap.add_argument("--origin-log", action="store_true")
+    ap.add_argument("--verbose-log", action="store_true")
 
     args = ap.parse_args()
 
@@ -261,7 +261,7 @@ def main():
 
             pp = parse_payload_hex(data)
             if not pp:
-                if args.origin_log:
+                if args.verbose_log:
                     print(f"[RX BAD] frame={frame_id} from={src} "
                           f"t={t:.1f}ms exp={expected:.1f}ms jitter={jitter:.1f}ms raw={data[:16]}...")
                 continue
@@ -274,13 +274,13 @@ def main():
                 received.add(src)
                 if frame_id > args.warmup:
                     per_ok[src] += 1
-                if args.origin_log:
+                if args.verbose_log:
                     print(f"[RX OK] frame={frame_id} from={src} "
                           f"t={t:.1f}ms exp={expected:.1f}ms jitter={jitter:.1f}ms rid={rid}")
             else:
                 if frame_id > args.warmup:
                     per_mismatch[src] += 1
-                if args.origin_log:
+                if args.verbose_log:
                     print(f"[RX MISMATCH] expect={frame_id} got={fid} from={src} "
                           f"t={t:.1f}ms exp={expected:.1f}ms jitter={jitter:.1f}ms rid={rid}")
 

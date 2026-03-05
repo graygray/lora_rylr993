@@ -151,7 +151,7 @@ def parse_args():
     ap.add_argument("--cr", type=int, default=1)
     ap.add_argument("--preamble", type=int, default=12)
 
-    ap.add_argument("--slot", type=float, default=0.15)
+    ap.add_argument("--slot", type=float, default=0.1)
     ap.add_argument("--base-delay", type=float, default=0.25)
     ap.add_argument("--tx-offset", type=float, default=0.02)
 
@@ -160,7 +160,7 @@ def parse_args():
                          "First 6 bytes are rid+fid hex, rest dummy printable.")
 
     # ★ key: compensate delay from real RF RX time to host seeing '+RCV=' line
-    ap.add_argument("--rx-delay-ms", type=float, default=0.0,
+    ap.add_argument("--rx-delay-ms", type=float, default=175.0,
                     help="Compensate latency between actual RF RX time and when '+RCV=' line is read by this program. "
                          "Example: 175.0")
 
