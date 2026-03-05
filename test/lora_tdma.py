@@ -402,17 +402,31 @@ def run_client(args):
     
     # Store the timeout threshold (e.g. 5 missed frames)
     # If using --auto-role, we allow failover. If strictly --client, we might just wait.
-    # Let's provide a basic failover for --auto-role users.
-    failover_timeout_s = args.frame * 5.0  # 5 frames of silence
+    # To prevent multiple robots from becoming Server at the exact same moment,
+    # we add a staggered delay based on their robotid. 
+    # Robot 2 waits base + 0s. Robot 3 waits base + 2s. Robot 4 waits base + 4s, etc.
+    base_failover_s = args.frame * 5.0
+    stagger_delay_s = (args.robotid - 2) * 2.5 if args.robotid >= 2 else 0.0
+    failover_timeout_s = base_failover_s + stagger_delay_s
+    
     last_beacon_mono = time.monotonic()
 
     while True:
         # Check for failover if acting as a client under --auto-role
-        if args.auto_role and time.monotonic() - last_beacon_mono > failover_timeout_s:
+        if args.auto_role and (time.monotonic() - last_beacon_mono) > failover_timeout_s:
             if verbose:
-                print(f"[!] No beacons for {failover_timeout_s:.1f}s. Server died! Commencing Failover...")
+                print(f"[!] No beacons for {failover_timeout_s:.1f}s (Staggered for ID {args.robotid}). Server died! Commencing Failover...")
+            
+            # Flush any pending data before we switch roles
+            ser.reset_input_buffer()
             ser.close()
             print("====== Switching to SERVER mode (Failover) ======")
+            
+            # When we take over, we MUST act as the new MASTER (address 1)
+            # so the remaining clients don't have to change their configuration.
+            # We rewrite args.master to be 1, but we still broadcast to the original robots list.
+            args.master = 1
+            
             run_server(args)
             return  # run_server handles the infinite loop from here
 
