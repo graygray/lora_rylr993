@@ -403,11 +403,14 @@ def run_client(args):
     # Store the timeout threshold (e.g. 5 missed frames)
     # To prevent multiple robots from becoming Server at the exact same moment,
     # we add a staggered delay based on their robotid. 
-    # Robot 2 waits base + 0s. Robot 3 waits base + 6s. Robot 4 waits base + 12s, etc.
+    # Robot 1 waits base + 0s. Robot 2 waits base + 6s. Robot 3 waits base + 12s, etc.
     # We need a large stagger because the LoRa module takes ~5 seconds to Soft Reset (ATZ) 
     # and reconfigure itself as a Master before it can send the first beacon!
+    
+    # Normally master=1. If ID 1 is currently a client, it should failover first.
+    # If ID 1 goes down, ID 2 failovers next.
     base_failover_s = args.frame * 5.0
-    stagger_delay_s = (args.robotid - 2) * 6.0 if args.robotid >= 2 else 0.0
+    stagger_delay_s = max(0.0, (args.robotid - 1) * 6.0)
     failover_timeout_s = base_failover_s + stagger_delay_s
     
     last_beacon_mono = time.monotonic()
