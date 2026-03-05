@@ -179,8 +179,17 @@ def init_radio_master(ser, args):
     time.sleep(0.5)
 
 def run_server(args):
+    verbose = not args.quiet
     robots = parse_robots(args.robots)
     port = resolve_port(args.port)
+    bw_code = parse_bw_to_code(args.bw)
+
+    if verbose:
+        print(f"[CFG] PORT={port} BAUD={args.baud} MASTER={args.master} "
+              f"sf={args.sf} bw_code={bw_code} cr={args.cr} pre={args.preamble} "
+              f"slot={args.slot:.3f}s base={args.base_delay:.3f}s off={args.tx_offset:.3f}s "
+              f"frame={args.frame:.3f}s robots={args.robots}")
+
     ser = serial.Serial(port, args.baud, timeout=0.1)
 
     init_radio_master(ser, args)
