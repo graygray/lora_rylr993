@@ -446,6 +446,7 @@ def parse_args():
     group = ap.add_mutually_exclusive_group(required=True)
     group.add_argument("--server", action="store_true", help="Run as TDMA Master")
     group.add_argument("--client", action="store_true", help="Run as TDMA Robot")
+    group.add_argument("--auto-role", action="store_true", help="Listen for beacons. If none found, become server. Otherwise, become client.")
 
     # Common Settings
     ap.add_argument("--port", default=None, help="Serial port: 0->/dev/ttyUSB0 or /dev/ttyUSBX")
@@ -463,7 +464,7 @@ def parse_args():
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
 
     # Server Settings
-    ap.add_argument("--robots", required=False, help="Comma-separated list (e.g. 2-5) Required for --server")
+    ap.add_argument("--robots", required=False, help="Comma-separated list (e.g. 2-5) Required for --server or --auto-role")
     ap.add_argument("--frame", type=float, default=1.5, help="Frame duration in seconds")
     ap.add_argument("--warmup", type=int, default=8, help="Warmup frame ignore count (server)")
     ap.add_argument("--print-interval", type=int, default=20, help="Print summary every X frames (server)")
@@ -471,13 +472,57 @@ def parse_args():
     ap.add_argument("--auto", action="store_true", help="Auto parameter recommendations (server)")
     ap.add_argument("--verbose-log", action="store_true", help="Verbose RX debug logging (server)")
 
-    # Client Settings
-    ap.add_argument("--robotid", type=int, required=False, help="Node ID. Required for --client")
+    # Client/Auto Settings
+    ap.add_argument("--robotid", type=int, required=False, help="Node ID. Required for --client or --auto-role")
     ap.add_argument("--payload-bytes", type=int, default=32, help="TX payload size in BYTES (client)")
     ap.add_argument("--rx-delay-ms", type=float, default=175.0, help="RF to serial latency compensation (client)")
     ap.add_argument("--busy-tail-ms", type=float, default=2.0, help="Precise timing busy-wait tail (client)")
+    ap.add_argument("--listen-timeout", type=float, default=4.0, help="Wait time in seconds to detect an existing master for --auto-role")
 
     return ap.parse_args()
+
+def listen_for_beacon(ser: serial.Serial, timeout_s: float, verbose: bool) -> bool:
+    if verbose:
+        print(f"[*] Listening for existing master beacons for {timeout_s:.1f}s...")
+    
+    end = time.time() + timeout_s
+    while time.time() < end:
+        line = ser.readline().decode(errors="ignore").strip()
+        if not line:
+            continue
+        
+        r = parse_rcv(line)
+        if not r:
+            continue
+
+        src, ln, data, rssi, snr = r
+        if data.startswith("BCN") and len(data) >= 7:
+            if verbose:
+                print(f"[!] Master detected! (Beacon from {src}: {data} RSSI={rssi})")
+            return True
+    
+    if verbose:
+        print(f"[*] No master detected after {timeout_s:.1f}s.")
+    return False
+
+def dynamic_run(args):
+    port = resolve_port(args.port)
+    ser = serial.Serial(port, args.baud, timeout=0.1)
+    
+    # Needs a generic init first so it can listen
+    init_radio_robot(ser, args)  # robot init is the safest base config for listening
+    
+    heard_beacon = listen_for_beacon(ser, args.listen_timeout, not args.quiet)
+    
+    # close the temp serial so the actual run_server/run_client can open it normally and cleanly
+    ser.close()
+    
+    if heard_beacon:
+        print("====== Switching to CLIENT mode ======")
+        run_client(args)
+    else:
+        print("====== Switching to SERVER mode ======")
+        run_server(args)
 
 def main():
     args = parse_args()
@@ -498,6 +543,11 @@ def main():
             print("[ERR] --payload-bytes must be >= 6")
             sys.exit(2)
         run_client(args)
+    elif args.auto_role:
+        if not args.robotid or not args.robots:
+            print("[ERR] Both --robotid and --robots are required when running as --auto-role")
+            sys.exit(2)
+        dynamic_run(args)
 
 if __name__ == "__main__":
     main()
