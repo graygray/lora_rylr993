@@ -197,7 +197,7 @@ def main():
 
     ap.add_argument("--robots", required=True)
 
-    ap.add_argument("--frame", type=float, default=2.0)
+    ap.add_argument("--frame", type=float, default=1.5)
     ap.add_argument("--slot", type=float, default=0.1)
     ap.add_argument("--base-delay", type=float, default=0.25)
     ap.add_argument("--tx-offset", type=float, default=0.02)
