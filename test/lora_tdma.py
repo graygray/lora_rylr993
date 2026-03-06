@@ -231,6 +231,29 @@ def run_server(args):
             src = int(parts[0])
             data = parts[2]
 
+            # Dual-server conflict resolution:
+            # If we are the Server but we hear a Beacon from someone else...
+            if data.startswith("BCN") and len(data) >= 7:
+                try:
+                    other_frame = int(data[3:7])
+                    if verbose:
+                        print(f"[!] WARNING: Heard BCN{other_frame:04d} from ID {src}! Dual-server conflict detected.")
+                    
+                    # If the other server has a LOWER ID than us (higher priority), we yield.
+                    # As a fail-safe, if IDs are the same (shouldn't happen), we just yield to stop the jam.
+                    # Exception: If we are ID 1, we NEVER yield. ID 1 is the supreme master.
+                    if args.robotid != 1 and (src <= args.robotid or src == 1):
+                        print(f"====== Yielding Master Role to ID {src}. Switching to CLIENT mode ======")
+                        ser.close()
+                        run_client(args)
+                        return
+                    else:
+                        if verbose:
+                            print(f"[*] I have higher priority (my ID: {args.robotid}). Ignoring imposter ID {src}.")
+                except ValueError:
+                    pass
+                continue
+
             if src not in robots:
                 continue
 
