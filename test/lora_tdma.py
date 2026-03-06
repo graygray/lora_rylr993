@@ -236,6 +236,11 @@ def run_server(args):
     relay_pool: Dict[int, str] = {}
     
     while True:
+        # To break phase-lock in dual-master collisions, add a tiny bit of random jitter 
+        # to the START of each frame.
+        jitter_break = random.uniform(0, 0.050)
+        time.sleep(jitter_break)
+        
         frame_id += 1
         start = time.monotonic()
         
@@ -725,10 +730,17 @@ def parse_args():
     return ap.parse_args()
 
 def listen_for_beacon(ser: serial.Serial, timeout_s: float, verbose: bool) -> bool:
-    if verbose:
-        print(f"[*] Listening for existing master beacons for {timeout_s:.1f}s...")
+    # Clear the buffer first to ensure we aren't processing stale responses
+    drain_uart(ser, 0.5, verbose)
     
-    end = time.time() + timeout_s
+    # Add random jitter to the timeout so multiple nodes starting at once
+    # don't all finish discovery at the exact same millisecond.
+    actual_timeout = timeout_s + random.uniform(0, 2.0)
+    
+    if verbose:
+        print(f"[*] Listening for existing master beacons for {actual_timeout:.1f}s (jittered)...")
+    
+    end = time.time() + actual_timeout
     while time.time() < end:
         line = ser.readline().decode(errors="ignore").strip()
         if not line:
