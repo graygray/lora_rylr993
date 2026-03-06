@@ -863,16 +863,22 @@ def run_auto_id(args):
         # Beacon format if offering: BCNxxxx_UUID:ID
         # e.g., BCN0012_A3F9:4
         if "_" in data and f"{my_uuid}:" in data.split("_")[1]:
-            offer_part = data.split("_")[1]
             try:
+                offer_part = data.split("_")[1]
+                # Clean the offer part: e.g. "67A5:3+222..." -> "67A5:3"
+                if "+" in offer_part:
+                    offer_part = offer_part.split("+")[0]
+                
                 offered_id = int(offer_part.split(":")[1])
                 assigned_id = offered_id
                 if not args.quiet:
                     print(f"[!] SUCCESS! Master assigned me ID {assigned_id}. Applying configuration...")
                 break
-            except:
+            except Exception as e:
+                if not args.quiet:
+                    print(f"[WRN] Failed to parse ID offer: {e}")
                 pass
-                
+               
         # If we reach here, we heard a beacon but no offer for us.
         # It's time to send our JOIN request in the designated JOIN slot.
         # The JOIN slot is dynamically calculated as the slot AFTER the last active robot.
