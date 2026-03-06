@@ -309,6 +309,7 @@ def run_server(args):
                     # Example: if robots=[1,2,3,4,5], we need to find one that is NOT in registry
                     # but wait, robots list defines total capacity. 
                     # Let's say all IDs in robots list (except master) are available pool.
+                    assigned_id = None
                     used_ids = set(auto_id_registry.values())
                     used_ids.add(args.master) # Server takes its own ID
                     
