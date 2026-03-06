@@ -208,6 +208,7 @@ def run_server(args):
     jitter_stats: Dict[int, Stats] = {r: Stats() for r in robots}
     rtt_stats: Dict[int, Stats] = {r: Stats() for r in robots}
     last_heard_frame: Dict[int, int] = {r: 0 for r in robots}
+    has_joined: Dict[int, bool] = {r: False for r in robots}
 
     frame_id = 0
     
@@ -285,6 +286,14 @@ def run_server(args):
                         freed_id = auto_id_registry.pop(dead)
                         if verbose:
                             print(f"[*] Reclaiming inactive ID {freed_id} from UUID {dead} (Silent for >15 frames)")
+                        # Reset stats for the reclaimed ID
+                        per_expected[freed_id] = 0
+                        per_ok[freed_id] = 0
+                        per_mismatch[freed_id] = 0
+                        jitter_stats[freed_id] = Stats()
+                        rtt_stats[freed_id] = Stats()
+                        has_joined[freed_id] = False
+                        last_heard_frame[freed_id] = 0
 
                     # Find lowest available ID from args.robots
                     # Example: if robots=[1,2,3,4,5], we need to find one that is NOT in registry
@@ -307,6 +316,7 @@ def run_server(args):
                     
                     # IMPORTANT: Initialize the lease timer so we don't immediately revoke it next frame
                     last_heard_frame[assigned_id] = frame_id
+                    has_joined[assigned_id] = True
                     
                     if verbose:
                         print(f"[*] Allocated ID {assigned_id} to UUID {uuid_str}")
@@ -336,6 +346,7 @@ def run_server(args):
             
             # If we successfully parsed a payload from them, update their lease!
             last_heard_frame[src] = frame_id
+            has_joined[src] = True
             
             if fid == frame_id:
                 received.add(src)
@@ -353,13 +364,16 @@ def run_server(args):
 
         if frame_id > args.warmup:
             for r in robots:
-                per_expected[r] += 1
+                if has_joined.get(r, False) and r != args.robotid:
+                    per_expected[r] = per_expected.get(r, 0) + 1
 
         if frame_id % args.print_interval == 0:
             print("\n====== PER SUMMARY ======")
             total_ok = 0
             total_e = 0
             for r in robots:
+                if not has_joined.get(r, False) or r == args.robotid:
+                    continue
                 e = per_expected[r]
                 ok = per_ok[r]
                 per = (e-ok)/e if e else 0
@@ -372,7 +386,7 @@ def run_server(args):
             gper = 1 - total_ok/total_e if total_e else 0
             print(f"GLOBAL PER = {gper*100:.3f}%")
 
-            if args.auto:
+            if args.auto_calc:
                 rec_slot = auto_slot(args.frame, args.base_delay, args.tx_offset, robots, args.margin, jitter_stats)
                 rec_frame = auto_frame(args.slot, args.base_delay, args.tx_offset, robots, args.margin, jitter_stats)
                 rec_max = auto_max_robots(args.frame, args.slot, args.base_delay, args.tx_offset, args.margin, jitter_stats)
@@ -610,7 +624,7 @@ def parse_args():
     ap.add_argument("--warmup", type=int, default=8, help="Warmup frame ignore count (server)")
     ap.add_argument("--print-interval", type=int, default=20, help="Print summary every X frames (server)")
     ap.add_argument("--margin", type=float, default=0.03, help="Time margin for auto calculations")
-    ap.add_argument("--auto", action="store_true", help="Auto parameter recommendations (server)")
+    ap.add_argument("--auto-calc", action="store_true", help="Auto parameter recommendations (server)")
     ap.add_argument("--verbose-log", action="store_true", help="Verbose RX debug logging (server)")
 
     # Client/Auto Settings
