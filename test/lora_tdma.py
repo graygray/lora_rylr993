@@ -187,9 +187,6 @@ def init_radio_master(ser, args):
 
 def run_server(args):
     verbose = not args.quiet
-    if not args.robots:
-        print("[ERR] --robots is required for server to calculate TDMA slots.")
-        sys.exit(2)
     robots = parse_robots(args.robots)
     
     if args.frame is None:
@@ -626,7 +623,7 @@ def parse_args():
     ap = argparse.ArgumentParser("TDMA System (Master/Robot)")
 
     # Execution Mode
-    group = ap.add_mutually_exclusive_group(required=True)
+    group = ap.add_mutually_exclusive_group(required=False)
     group.add_argument("--server", action="store_true", help="Run as TDMA Master")
     group.add_argument("--client", action="store_true", help="Run as TDMA Robot")
     group.add_argument("--auto-role", action="store_true", help="Listen for beacons. If none found, become server. Otherwise, become client.")
@@ -648,7 +645,7 @@ def parse_args():
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
 
     # Server Settings
-    ap.add_argument("--robots", required=False, help="Comma-separated list (e.g. 2-5) Required for --server or --auto-role or --auto-id")
+    ap.add_argument("--robots", default="1-8", help="Comma-separated list (e.g. 2-5) Required for --server or --auto-role or --auto-id")
     ap.add_argument("--frame", type=float, default=None, help="Frame duration (seconds). If None and --robots set, calculated automatically.")
     ap.add_argument("--warmup", type=int, default=10, help="Warmup frame ignore count (server)")
     ap.add_argument("--print-interval", type=int, default=10, help="Print summary every X frames (server)")
@@ -855,6 +852,11 @@ def main():
         if not args.robots:
             print("[ERR] --robots is required when running as --auto-id, so the bot knows the network size bounds.")
             sys.exit(2)
+        run_auto_id(args)
+    else:
+        # Default behavior: auto-id
+        if not args.quiet:
+            print("[INFO] No mode specified. Defaulting to --auto-id")
         run_auto_id(args)
 
 if __name__ == "__main__":
