@@ -351,13 +351,13 @@ def run_server(args):
             
             if fid == frame_id:
                 received.add(src)
-                if frame_id > args.warmup:
+                if joined_at_frame[src] != -1 and frame_id > joined_at_frame[src] + args.warmup:
                     per_ok[src] += 1
                 if args.verbose_log:
                     print(f"[RX OK] frame={frame_id} from={src} "
                           f"t={t:.1f}ms exp={expected:.1f}ms jitter={jitter:.1f}ms rid={rid}")
             else:
-                if frame_id > args.warmup:
+                if joined_at_frame[src] != -1 and frame_id > joined_at_frame[src] + args.warmup:
                     per_mismatch[src] += 1
                 if args.verbose_log:
                     print(f"[RX MISMATCH] expect={frame_id} got={fid} from={src} "
