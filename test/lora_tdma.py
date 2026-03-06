@@ -639,9 +639,12 @@ def parse_args():
     ap.add_argument("--bw", default="500")
     ap.add_argument("--cr", type=int, default=1)
     ap.add_argument("--preamble", type=int, default=12)
-    ap.add_argument("--slot", type=float, default=0.1)
-    ap.add_argument("--base-delay", type=float, default=0.25)
-    ap.add_argument("--tx-offset", type=float, default=0.02)
+    # ap.add_argument("--slot", type=float, default=0.1)
+    # ap.add_argument("--base-delay", type=float, default=0.25)
+    # ap.add_argument("--tx-offset", type=float, default=0.02)
+    ap.add_argument("--slot", type=float, default=0.05)
+    ap.add_argument("--base-delay", type=float, default=0.05)
+    ap.add_argument("--tx-offset", type=float, default=0.01)
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
 
     # Server Settings
@@ -655,7 +658,7 @@ def parse_args():
 
     # Client/Auto Settings
     ap.add_argument("--robotid", type=int, required=False, help="Node ID. Required for --client or --auto-role")
-    ap.add_argument("--payload-bytes", type=int, default=32, help="TX payload size in BYTES (client)")
+    ap.add_argument("--payload-bytes", type=int, default=24, help="TX payload size in BYTES (client)")
     ap.add_argument("--rx-delay-ms", type=float, default=175.0, help="RF to serial latency compensation (client)")
     ap.add_argument("--busy-tail-ms", type=float, default=2.0, help="Precise timing busy-wait tail (client)")
     ap.add_argument("--listen-timeout", type=float, default=4.0, help="Wait time in seconds to detect an existing master for --auto-role")
