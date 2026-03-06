@@ -120,7 +120,8 @@ def parse_payload_hex(data_hex: str):
         # Format: 1 hex char ID (0-F), 2 hex char Seq (00-FF)
         rid = int(data_hex[0:1], 16)
         fid = int(data_hex[1:3], 16)
-        return rid, fid
+        data_part = data_hex[3:]
+        return rid, fid, data_part
     except:
         return None
 
@@ -231,15 +232,31 @@ def run_server(args):
 
     my_uuid = getattr(args, 'my_uuid', f"{random.randint(0, 0xFFFF):04X}")
     
+    # Aggregated relay data from robots (ID -> Payload Data)
+    relay_pool: Dict[int, str] = {}
+    
     while True:
         frame_id += 1
         start = time.monotonic()
-
+        
+        # Build aggregated data string: +2data+3data (stripping robot sequence)
+        relay_str = ""
+        for rid in sorted(relay_pool.keys()):
+            relay_str += f"+{rid:1x}{relay_pool[rid]}"
+        
         if frame_id > 9999:
             frame_id = frame_id % 10000
-        beacon = f"BCN{frame_id:04d}@{my_uuid}{pending_offer}"
+        beacon = f"BCN{frame_id:04d}@{my_uuid}{pending_offer}{relay_str}"
+        
+        # LoRa RYLR993 / AT+SEND typically has a 242-byte limit
+        if len(beacon) > 242:
+            if not args.quiet:
+                print(f"[WRN] Beacon length ({len(beacon)}) exceeds 242 limit! Truncating aggregated data.")
+            beacon = beacon[:242]
+
         write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}", verbose=not args.quiet)
         pending_offer = "" # Clear the offer after sending it once
+        relay_pool = {}    # Clear relay pool for the new frame
 
         listen_end = start + args.frame - 0.01
         received = set()
@@ -378,12 +395,15 @@ def run_server(args):
                           f"t={t:.1f}ms exp={expected:.1f}ms jitter={jitter:.1f}ms raw={data[:16]}...")
                 continue
 
-            rid, fid = pp
+            rid, fid, dpart = pp
             
             # If we successfully parsed a payload from them, update their lease!
             last_heard_frame[src] = frame_id
             if joined_at_frame[src] == -1:
                 joined_at_frame[src] = frame_id
+            
+            # Store data for next beacon relay
+            relay_pool[src] = dpart
             
             # 8-bit sequence number rollover sync
             if fid == (frame_id % 256):
