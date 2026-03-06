@@ -123,21 +123,27 @@ def parse_payload_hex(data_hex: str):
         return None
 
 def auto_slot(frame, base, offset, robots, margin, jitter_stats):
-    worst_j = max(jitter_stats[r].max_v for r in robots) / 1000.0
-    max_id = max(robots)
+    vals = [jitter_stats[r].max_v for r in robots if math.isfinite(jitter_stats[r].max_v)]
+    worst_j = max(vals) / 1000.0 if vals else 0.0
+    
+    max_id = max(robots) if robots else 1
     denom = max_id - 1
+    if denom <= 0:
+        return 0
     budget = frame - margin - base - offset - worst_j
     if budget <= 0:
         return 0
     return budget / denom
 
 def auto_frame(slot, base, offset, robots, margin, jitter_stats):
-    worst_j = max(jitter_stats[r].max_v for r in robots) / 1000.0
-    max_id = max(robots)
+    vals = [jitter_stats[r].max_v for r in robots if math.isfinite(jitter_stats[r].max_v)]
+    worst_j = max(vals) / 1000.0 if vals else 0.0
+    max_id = max(robots) if robots else 1
     return base + (max_id - 1)*slot + offset + worst_j + margin
 
 def auto_max_robots(frame, slot, base, offset, margin, jitter_stats):
-    worst_j = max(jitter_stats[r].max_v for r in jitter_stats) / 1000.0
+    vals = [jitter_stats[r].max_v for r in jitter_stats if math.isfinite(jitter_stats[r].max_v)]
+    worst_j = max(vals) / 1000.0 if vals else 0.0
     budget = frame - margin - base - offset - worst_j
     if budget <= 0:
         return 1
