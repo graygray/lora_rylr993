@@ -114,11 +114,12 @@ class Stats:
         return f"n={self.n} min={self.min_v:.1f}ms avg={self.avg():.1f}ms max={self.max_v:.1f}ms"
 
 def parse_payload_hex(data_hex: str):
-    if not data_hex or len(data_hex) < 6:
+    if not data_hex or len(data_hex) < 3:
         return None
     try:
-        rid = int(data_hex[0:2], 16)
-        fid = int(data_hex[2:6], 16)
+        # Format: 1 hex char ID (0-F), 2 hex char Seq (00-FF)
+        rid = int(data_hex[0:1], 16)
+        fid = int(data_hex[1:3], 16)
         return rid, fid
     except:
         return None
@@ -363,7 +364,8 @@ def run_server(args):
             if joined_at_frame[src] == -1:
                 joined_at_frame[src] = frame_id
             
-            if fid == frame_id:
+            # 8-bit sequence number rollover sync
+            if fid == (frame_id % 256):
                 received.add(src)
                 jitter_stats[src].add(jitter)
                 rtt_stats[src].add(t)
@@ -376,7 +378,7 @@ def run_server(args):
                 if joined_at_frame[src] != -1 and frame_id > joined_at_frame[src] + args.warmup:
                     per_mismatch[src] += 1
                 if args.verbose_log:
-                    print(f"[RX MISMATCH] expect={frame_id} got={fid} from={src} "
+                    print(f"[RX MISMATCH] expect={frame_id % 256} got={fid} from={src} "
                           f"t={t:.1f}ms exp={expected:.1f}ms jitter={jitter:.1f}ms rid={rid}")
 
         for r in robots:
@@ -460,10 +462,11 @@ def parse_rcv(line: str) -> Optional[Tuple[int, int, str, int, int]]:
         return None
 
 def make_payload_ascii(my_id: int, frame_id: int, payload_bytes: int) -> str:
-    if payload_bytes < 6:
-        raise ValueError("--payload-bytes must be >= 6.")
-    header = f"{my_id:02x}{frame_id:04x}"
-    dummy_len = payload_bytes - 6
+    if payload_bytes < 3:
+        raise ValueError("--payload-bytes must be >= 3.")
+    # ID is 1 char (0-15), Seq is 2 chars (0-255 rollover)
+    header = f"{(my_id & 0xF):1x}{(frame_id % 256):02x}"
+    dummy_len = payload_bytes - 3
     return header + ("a" * dummy_len)
 
 def sleep_until(deadline_mono: float, busy_tail_s: float = 0.002):
