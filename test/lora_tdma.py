@@ -282,9 +282,11 @@ def run_server(args):
                             should_yield = True
                     
                     if should_yield:
-                        print(f"====== Yielding Master Role to ID {src} (UUID: {other_uuid}). Switching to CLIENT mode ======")
+                        print(f"====== Yielding Master Role to ID {src} (UUID: {other_uuid}). Resetting and Re-Joining... ======")
                         ser.close()
-                        run_client(args)
+                        # Reset ID so we don't try to reuse "ID 1" as a client
+                        args.robotid = None
+                        run_auto_id(args)
                         return
                     else:
                         if verbose:
@@ -362,7 +364,7 @@ def run_server(args):
                 pending_offer = f"_{uuid_str}:{assigned_id}"
                 continue
 
-            if src not in robots:
+            if src not in robots or src == args.robotid:
                 continue
 
             t = now_ms(start)
