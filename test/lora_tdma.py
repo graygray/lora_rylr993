@@ -207,6 +207,7 @@ def run_server(args):
 
     jitter_stats: Dict[int, Stats] = {r: Stats() for r in robots}
     rtt_stats: Dict[int, Stats] = {r: Stats() for r in robots}
+    last_heard_frame: Dict[int, int] = {r: 0 for r in robots}
 
     frame_id = 0
     
@@ -273,6 +274,18 @@ def run_server(args):
                 if uuid_str in auto_id_registry:
                     assigned_id = auto_id_registry[uuid_str]
                 else:
+                    # Cleanup dead leases: If an ID hasn't been heard from in >15 frames, release it!
+                    # We need a list to avoid modifying dict while iterating
+                    dead_uuids = []
+                    for reg_uuid, reg_id in auto_id_registry.items():
+                        if frame_id - last_heard_frame.get(reg_id, 0) > 15:
+                            dead_uuids.append(reg_uuid)
+                    
+                    for dead in dead_uuids:
+                        freed_id = auto_id_registry.pop(dead)
+                        if verbose:
+                            print(f"[*] Reclaiming inactive ID {freed_id} from UUID {dead} (Silent for >15 frames)")
+
                     # Find lowest available ID from args.robots
                     # Example: if robots=[1,2,3,4,5], we need to find one that is NOT in registry
                     # but wait, robots list defines total capacity. 
@@ -291,6 +304,10 @@ def run_server(args):
                         continue
                         
                     auto_id_registry[uuid_str] = assigned_id
+                    
+                    # IMPORTANT: Initialize the lease timer so we don't immediately revoke it next frame
+                    last_heard_frame[assigned_id] = frame_id
+                    
                     if verbose:
                         print(f"[*] Allocated ID {assigned_id} to UUID {uuid_str}")
                         
@@ -316,6 +333,10 @@ def run_server(args):
                 continue
 
             rid, fid = pp
+            
+            # If we successfully parsed a payload from them, update their lease!
+            last_heard_frame[src] = frame_id
+            
             if fid == frame_id:
                 received.add(src)
                 if frame_id > args.warmup:
