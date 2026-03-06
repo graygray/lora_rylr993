@@ -230,19 +230,28 @@ def run_server(args):
     
     print("TDMA MASTER START")
 
-    my_uuid = getattr(args, 'my_uuid', f"{random.randint(0, 0xFFFF):04X}")
+    # Ensure we use the same UUID allocated during Auto-ID/Main
+    my_uuid = getattr(args, 'my_uuid', None)
+    if my_uuid is None:
+        my_uuid = f"{random.randint(0, 0xFFFF):04X}"
+        setattr(args, 'my_uuid', my_uuid)
     
     # Aggregated relay data from robots (ID -> Payload Data)
     relay_pool: Dict[int, str] = {}
     
+    # Stable frame timing logic
+    next_frame_start = time.monotonic()
+    
     while True:
-        # To break phase-lock in dual-master collisions, add a tiny bit of random jitter 
-        # to the START of each frame.
-        jitter_break = random.uniform(0, 0.050)
-        time.sleep(jitter_break)
+        # Increase jitter (0-150ms) to break phase-lock in dual-master collisions
+        jitter_break = random.uniform(0, 0.150)
+        start = next_frame_start + jitter_break
+        sleep_until(start, busy_tail_s=0.002)
+        
+        # Calculate next expected frame start for stability
+        next_frame_start = start + args.frame - jitter_break
         
         frame_id += 1
-        start = time.monotonic()
         
         # Build aggregated data string: +2data+3data (stripping robot sequence)
         relay_str = ""
@@ -263,17 +272,24 @@ def run_server(args):
         pending_offer = "" # Clear the offer after sending it once
         relay_pool = {}    # Clear relay pool for the new frame
 
-        listen_end = start + args.frame - 0.01
+        listen_end = start + args.frame - 0.015 # Extra margin for processing
         received = set()
 
         while time.monotonic() < listen_end:
+            # Use non-blocking check to avoid 100ms timeout lag
+            if ser.in_waiting == 0:
+                time.sleep(0.001)
+                continue
+
             line = read_line(ser)
             if not line.startswith("+RCV="):
                 continue
 
-            parts = line[5:].split(",")
-            src = int(parts[0])
-            data = parts[2]
+            r = parse_rcv(line)
+            if not r:
+                continue
+            
+            src, ln, data, rssi, snr = r
 
             # Dual-server conflict resolution:
             # If we are the Server but we hear a Beacon from someone else...
@@ -757,7 +773,7 @@ def listen_for_beacon(ser: serial.Serial, timeout_s: float, verbose: bool) -> bo
             return True
     
     if verbose:
-        print(f"[*] No master detected after {timeout_s:.1f}s.")
+        print(f"[*] No master detected after {actual_timeout:.1f}s.")
     return False
 
 def dynamic_run(args):
@@ -780,8 +796,12 @@ def dynamic_run(args):
         run_server(args)
 
 def run_auto_id(args):
-    # Generate a random 4-byte HEX UUID
-    my_uuid = f"{random.randint(0, 0xFFFF):04X}"
+    # Use existing UUID or generate a new one
+    my_uuid = getattr(args, 'my_uuid', None)
+    if my_uuid is None:
+        my_uuid = f"{random.randint(0, 0xFFFF):04X}"
+        setattr(args, 'my_uuid', my_uuid)
+    
     port = resolve_port(args.port)
     
     # Temporarily set robotid to an unassigned very high value (e.g., 255)
@@ -808,7 +828,7 @@ def run_auto_id(args):
         args.robotid = 1
         ser.close()
         if not args.quiet:
-            print("====== No Master found. Switching to SERVER mode (ID 1) ======")
+            print(f"====== Switching to SERVER mode (ID 1) ======")
         run_server(args)
         return
 
