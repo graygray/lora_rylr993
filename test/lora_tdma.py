@@ -187,7 +187,20 @@ def init_radio_master(ser, args):
 
 def run_server(args):
     verbose = not args.quiet
+    if not args.robots:
+        print("[ERR] --robots is required for server to calculate TDMA slots.")
+        sys.exit(2)
     robots = parse_robots(args.robots)
+    
+    if args.frame is None:
+        # Formula from user: min_frame = base + (N-1)*slot + tx_offset + jitter_max + guard
+        # Using jitter_max = 0.0018 (constant from image) and margin as guard (0.03)
+        max_id = max(robots) if robots else 1
+        args.frame = args.base_delay + (max_id - 1) * args.slot + args.tx_offset + 0.0018 + args.margin
+        if verbose:
+            print(f"[AUTO-FRAME] Calculated frame duration: {args.frame:.4f}s for N={max_id} robots")
+            print(f"             (base={args.base_delay} slot={args.slot} off={args.tx_offset} jitter=0.0018 guard={args.margin})")
+
     port = resolve_port(args.port)
     bw_code = parse_bw_to_code(args.bw)
 
@@ -195,7 +208,7 @@ def run_server(args):
         print(f"[CFG] PORT={port} BAUD={args.baud} MASTER={args.master} "
               f"sf={args.sf} bw_code={bw_code} cr={args.cr} pre={args.preamble} "
               f"slot={args.slot:.3f}s base={args.base_delay:.3f}s off={args.tx_offset:.3f}s "
-              f"frame={args.frame:.3f}s robots={args.robots}")
+              f"frame={args.frame:.4f}s robots={args.robots}")
 
     ser = serial.Serial(port, args.baud, timeout=0.1)
 
@@ -491,8 +504,22 @@ def init_radio_robot(ser, args):
 
 def run_client(args):
     verbose = not args.quiet
-    bw_code = parse_bw_to_code(args.bw)
+    
+    # If robots provided without frame, auto-calculate it to stay in sync with server
+    if args.frame is None:
+        if args.robots:
+            robots = parse_robots(args.robots)
+            max_id = max(robots) if robots else 1
+            args.frame = args.base_delay + (max_id - 1) * args.slot + args.tx_offset + 0.0018 + args.margin
+            if verbose:
+                print(f"[AUTO-FRAME] Calculated frame duration: {args.frame:.4f}s for N={max_id} robots")
+        else:
+            args.frame = 1.5 # Legacy default fallback
+            if verbose:
+                print(f"[WRN] --frame not provided and --robots missing. Using default {args.frame}s")
+
     port = resolve_port(args.port)
+    bw_code = parse_bw_to_code(args.bw)
 
     if verbose:
         print(f"[CFG] PORT={port} BAUD={args.baud} MY_ID={args.robotid} MASTER={args.master} "
@@ -622,7 +649,7 @@ def parse_args():
 
     # Server Settings
     ap.add_argument("--robots", required=False, help="Comma-separated list (e.g. 2-5) Required for --server or --auto-role or --auto-id")
-    ap.add_argument("--frame", type=float, default=1.5, help="Frame duration in seconds")
+    ap.add_argument("--frame", type=float, default=None, help="Frame duration (seconds). If None and --robots set, calculated automatically.")
     ap.add_argument("--warmup", type=int, default=10, help="Warmup frame ignore count (server)")
     ap.add_argument("--print-interval", type=int, default=10, help="Print summary every X frames (server)")
     ap.add_argument("--margin", type=float, default=0.03, help="Time margin for auto calculations")
