@@ -486,9 +486,10 @@ def make_payload_ascii(my_id: int, frame_id: int, payload_bytes: int) -> str:
     if payload_bytes < 3:
         raise ValueError("--payload-bytes must be >= 3.")
     # ID is 1 char (0-15), Seq is 2 chars (0-255 rollover)
-    header = f"{(my_id & 0xF):1x}{(frame_id % 256):02x}"
+    id_char = f"{(my_id & 0xF):1x}"
+    header = f"{id_char}{(frame_id % 256):02x}"
     dummy_len = payload_bytes - 3
-    return header + ("a" * dummy_len)
+    return header + (id_char * dummy_len)
 
 def sleep_until(deadline_mono: float, busy_tail_s: float = 0.002):
     while True:
