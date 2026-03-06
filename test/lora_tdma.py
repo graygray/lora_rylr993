@@ -229,13 +229,15 @@ def run_server(args):
     
     print("TDMA MASTER START")
 
+    my_uuid = getattr(args, 'my_uuid', f"{random.randint(0, 0xFFFF):04X}")
+    
     while True:
         frame_id += 1
         start = time.monotonic()
 
         if frame_id > 9999:
             frame_id = frame_id % 10000
-        beacon = f"BCN{frame_id:04d}{pending_offer}"
+        beacon = f"BCN{frame_id:04d}@{my_uuid}{pending_offer}"
         write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}", verbose=not args.quiet)
         pending_offer = "" # Clear the offer after sending it once
 
@@ -256,20 +258,37 @@ def run_server(args):
             if data.startswith("BCN") and len(data) >= 7:
                 try:
                     other_frame = int(data[3:7])
+                    other_uuid = ""
+                    if "@" in data:
+                        # BCNxxxx@UUID...
+                        at_idx = data.find("@")
+                        other_uuid = data[at_idx+1 : at_idx+5]
+
                     if verbose:
-                        print(f"[!] WARNING: Heard BCN{other_frame:04d} from ID {src}! Dual-server conflict detected.")
+                        print(f"[!] WARNING: Heard BCN{other_frame:04d}@{other_uuid} from ID {src}! Dual-server conflict detected.")
                     
-                    # If the other server has a LOWER ID than us (higher priority), we yield.
-                    # As a fail-safe, if IDs are the same (shouldn't happen), we just yield to stop the jam.
-                    # Exception: If we are ID 1, we NEVER yield. ID 1 is the supreme master.
-                    if args.robotid != 1 and (src <= args.robotid or src == 1):
-                        print(f"====== Yielding Master Role to ID {src}. Switching to CLIENT mode ======")
+                    # Tie-breaker logic:
+                    # 1. Lower ID wins (1 is highest priority).
+                    # 2. If IDs are the same, lower UUID wins.
+                    # We yield if:
+                    #   - The other ID is lower than ours (e.g. ID 1 vs ID 2)
+                    #   - The other ID is THE SAME but their UUID is lower (lexicographical)
+                    
+                    should_yield = False
+                    if src < args.robotid: 
+                        should_yield = True
+                    elif src == args.robotid:
+                        if other_uuid and other_uuid < my_uuid:
+                            should_yield = True
+                    
+                    if should_yield:
+                        print(f"====== Yielding Master Role to ID {src} (UUID: {other_uuid}). Switching to CLIENT mode ======")
                         ser.close()
                         run_client(args)
                         return
                     else:
                         if verbose:
-                            print(f"[*] I have higher priority (my ID: {args.robotid}). Ignoring imposter ID {src}.")
+                            print(f"[*] I have higher priority (my ID: {args.robotid}, UUID: {my_uuid}). Ignoring imposter ID {src}.")
                 except ValueError:
                     pass
                 continue
@@ -847,6 +866,9 @@ def run_auto_id(args):
 def main():
     args = parse_args()
     
+    # Generate a unique session UUID for tie-breaking and DHCP
+    setattr(args, 'my_uuid', f"{random.randint(0, 0xFFFF):04X}")
+    
     if args.server:
         if not args.robots:
             print("[ERR] --robots is required when running as --server")
@@ -856,11 +878,11 @@ def main():
         if not args.robotid:
             print("[ERR] --robotid is required when running as --client")
             sys.exit(2)
-        if args.robotid <= 0 or args.robotid > 65535:
-            print("[ERR] --robotid must be 1..65535")
+        if args.robotid <= 0 or args.robotid > 15:
+            print("[ERR] --robotid must be 1..15 for the 1-character HEX ID format.")
             sys.exit(2)
-        if args.payload_bytes < 6:
-            print("[ERR] --payload-bytes must be >= 6")
+        if args.payload_bytes < 3:
+            print("[ERR] --payload-bytes must be >= 3")
             sys.exit(2)
         run_client(args)
     elif args.auto_role:
