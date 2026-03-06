@@ -342,9 +342,6 @@ def run_server(args):
             expected = (args.base_delay + (src-1)*args.slot + args.tx_offset) * 1000.0
             jitter = t - expected
 
-            jitter_stats[src].add(jitter)
-            rtt_stats[src].add(t)
-
             pp = parse_payload_hex(data)
             if not pp:
                 if args.verbose_log:
@@ -361,6 +358,8 @@ def run_server(args):
             
             if fid == frame_id:
                 received.add(src)
+                jitter_stats[src].add(jitter)
+                rtt_stats[src].add(t)
                 if joined_at_frame[src] != -1 and frame_id > joined_at_frame[src] + args.warmup:
                     per_ok[src] += 1
                 if args.verbose_log:
@@ -667,7 +666,7 @@ def parse_args():
     # Client/Auto Settings
     ap.add_argument("--robotid", type=int, required=False, help="Node ID. Required for --client or --auto-role")
     ap.add_argument("--payload-bytes", type=int, default=24, help="TX payload size in BYTES (client)")
-    ap.add_argument("--rx-delay-ms", type=float, default=175.0, help="RF to serial latency compensation (client)")
+    ap.add_argument("--rx-delay-ms", type=float, default=160.0, help="RF to serial latency compensation (client)")
     ap.add_argument("--busy-tail-ms", type=float, default=2.0, help="Precise timing busy-wait tail (client)")
     ap.add_argument("--listen-timeout", type=float, default=4.0, help="Wait time in seconds to detect an existing master for --auto-role")
 
