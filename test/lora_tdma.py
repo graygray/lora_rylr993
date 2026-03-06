@@ -5,6 +5,7 @@ import time
 import math
 import sys
 from dataclasses import dataclass
+import random
 from typing import Dict, List, Optional, Tuple
 
 # ============================================================
@@ -208,6 +209,11 @@ def run_server(args):
     rtt_stats: Dict[int, Stats] = {r: Stats() for r in robots}
 
     frame_id = 0
+    
+    # Auto-ID Registry (UUID string -> assigned Robot ID integer)
+    auto_id_registry: Dict[str, int] = {}
+    pending_offer: str = "" # e.g., "_A3F9:5"
+    
     print("TDMA MASTER START")
 
     while True:
@@ -216,8 +222,9 @@ def run_server(args):
 
         if frame_id > 9999:
             frame_id = frame_id % 10000
-        beacon = f"BCN{frame_id:04d}"
+        beacon = f"BCN{frame_id:04d}{pending_offer}"
         write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}", verbose=not args.quiet)
+        pending_offer = "" # Clear the offer after sending it once
 
         listen_end = start + args.frame - 0.01
         received = set()
@@ -252,6 +259,43 @@ def run_server(args):
                             print(f"[*] I have higher priority (my ID: {args.robotid}). Ignoring imposter ID {src}.")
                 except ValueError:
                     pass
+                continue
+
+            # Auto-ID Process: Listen for JOIN requests
+            # JOIN payloads look like: JOIN:A3F9
+            # The length is typically 9 chars: JOIN (4) + : (1) + UUID (4)
+            if data.startswith("JOIN:") and len(data) >= 9:
+                uuid = data[5:9]
+                if verbose:
+                    print(f"[*] Heard JOIN request from UUID: {uuid}")
+                
+                # Check if already assigned
+                if uuid in auto_id_registry:
+                    assigned_id = auto_id_registry[uuid]
+                else:
+                    # Find lowest available ID from args.robots
+                    # Example: if robots=[1,2,3,4,5], we need to find one that is NOT in registry
+                    # but wait, robots list defines total capacity. 
+                    # Let's say all IDs in robots list (except master) are available pool.
+                    assigned_id = None
+                    used_ids = set(auto_id_registry.values())
+                    used_ids.add(args.robotid) # Server takes its own ID
+                    for r_id in robots:
+                        if r_id not in used_ids:
+                            assigned_id = r_id
+                            break
+                    
+                    if assigned_id is None:
+                        if verbose:
+                            print("[!] ERROR: Request received but no available IDs in pool!")
+                        continue
+                        
+                    auto_id_registry[uuid] = assigned_id
+                    if verbose:
+                        print(f"[*] Allocated ID {assigned_id} to UUID {uuid}")
+                        
+                # Queue the offer for the next beacon
+                pending_offer = f"_{uuid}:{assigned_id}"
                 continue
 
             if src not in robots:
