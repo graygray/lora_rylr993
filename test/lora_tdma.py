@@ -522,6 +522,7 @@ def parse_args():
     group.add_argument("--server", action="store_true", help="Run as TDMA Master")
     group.add_argument("--client", action="store_true", help="Run as TDMA Robot")
     group.add_argument("--auto-role", action="store_true", help="Listen for beacons. If none found, become server. Otherwise, become client.")
+    group.add_argument("--auto-id", action="store_true", help="Start as unassigned client, request ID dynamically from Master.")
 
     # Common Settings
     ap.add_argument("--port", default=None, help="Serial port: 0->/dev/ttyUSB0 or /dev/ttyUSBX")
@@ -539,7 +540,7 @@ def parse_args():
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
 
     # Server Settings
-    ap.add_argument("--robots", required=False, help="Comma-separated list (e.g. 2-5) Required for --server or --auto-role")
+    ap.add_argument("--robots", required=False, help="Comma-separated list (e.g. 2-5) Required for --server or --auto-role or --auto-id")
     ap.add_argument("--frame", type=float, default=1.5, help="Frame duration in seconds")
     ap.add_argument("--warmup", type=int, default=8, help="Warmup frame ignore count (server)")
     ap.add_argument("--print-interval", type=int, default=20, help="Print summary every X frames (server)")
@@ -599,6 +600,107 @@ def dynamic_run(args):
         print("====== Switching to SERVER mode ======")
         run_server(args)
 
+def run_auto_id(args):
+    # Generate a random 4-byte HEX UUID
+    my_uuid = f"{random.randint(0, 0xFFFF):04X}"
+    port = resolve_port(args.port)
+    
+    # Temporarily set robotid to an unassigned very high value (e.g., 255)
+    # just so we can initialize the radio without conflicting with normal robots.
+    # The actual network allows ID 0-65535.
+    original_id = args.robotid
+    args.robotid = random.randint(30000, 60000) 
+    
+    if not args.quiet:
+        print(f"[*] Starting Auto-ID process. My UUID is {my_uuid}")
+        print(f"[*] Initial radio setup with temporary ID {args.robotid}")
+
+    ser = serial.Serial(port, args.baud, timeout=0.1)
+    init_radio_robot(ser, args)
+
+    # Listen for a Master beacon to synchronize, and check for an OFFER
+    # We loop until we are assigned an ID.
+    assigned_id = None
+    rx_delay_s = args.rx_delay_ms / 1000.0
+    busy_tail_s = max(0.0, args.busy_tail_ms / 1000.0)
+
+    # To avoid all new robots hitting the JOIN slot at the exact same microsecond, 
+    # we use a simple exponential backoff or randomized wait frame count.
+    join_cooldown_frames = random.randint(1, 3)
+
+    if not args.quiet:
+        print("[*] Waiting for Master Beacons...")
+
+    while assigned_id is None:
+        line = ser.readline().decode(errors="ignore").strip()
+        if not line:
+            continue
+
+        r = parse_rcv(line)
+        if not r:
+            continue
+
+        src, ln, data, rssi, snr = r
+        
+        # Look for Beacon
+        if not (data.startswith("BCN") and len(data) >= 7):
+            continue
+
+        # Check if the beacon contains an offer for our UUID!
+        # Beacon format if offering: BCNxxxx_UUID:ID
+        # e.g., BCN0012_A3F9:4
+        if "_" in data and f"{my_uuid}:" in data.split("_")[1]:
+            offer_part = data.split("_")[1]
+            try:
+                offered_id = int(offer_part.split(":")[1])
+                assigned_id = offered_id
+                if not args.quiet:
+                    print(f"[!] SUCCESS! Master assigned me ID {assigned_id}. Applying configuration...")
+                break
+            except:
+                pass
+                
+        # If we reach here, we heard a beacon but no offer for us.
+        # It's time to send our JOIN request in the designated JOIN slot.
+        # The JOIN slot is dynamically calculated as the slot AFTER the last active robot.
+        if join_cooldown_frames > 0:
+            join_cooldown_frames -= 1
+            continue
+            
+        try:
+            frame = int(data[3:7])
+        except:
+            continue
+            
+        read_m = time.monotonic()
+        beacon_rx_m = read_m - rx_delay_s
+        
+        # We assume the Master expects the "JOIN" slot to be at the index of (max_robots + 1)
+        # So wait until all robots are done.
+        robot_list = parse_robots(args.robots)
+        max_id = max(robot_list) if robot_list else 1
+        
+        # The JOIN slot time:
+        join_tx_time = beacon_rx_m + args.base_delay + (max_id) * args.slot + args.tx_offset
+        
+        # Wait for the Join slot
+        sleep_until(join_tx_time, busy_tail_s=busy_tail_s)
+        
+        # Fire the JOIN request! Format: JOIN:UUID
+        join_payload = f"JOIN:{my_uuid}"
+        # We send it to Master (args.master)
+        write_cmd(ser, f"AT+SEND={args.master},{len(join_payload)},{join_payload}", not args.quiet)
+        
+        # Cooldown before trying again to avoid spamming / colliding constantly
+        join_cooldown_frames = random.randint(2, 5)
+
+    # We have an assigned ID! Apply it and switch to normal client mode.
+    ser.close()
+    
+    args.robotid = assigned_id
+    print(f"====== Transitioning to Normal CLIENT Mode as ID {assigned_id} ======")
+    run_client(args)
+
 def main():
     args = parse_args()
     
@@ -623,6 +725,11 @@ def main():
             print("[ERR] Both --robotid and --robots are required when running as --auto-role")
             sys.exit(2)
         dynamic_run(args)
+    elif args.auto_id:
+        if not args.robots:
+            print("[ERR] --robots is required when running as --auto-id, so the bot knows the network size bounds.")
+            sys.exit(2)
+        run_auto_id(args)
 
 if __name__ == "__main__":
     main()
