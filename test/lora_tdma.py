@@ -599,6 +599,14 @@ def run_client(args):
         tx_time = beacon_rx_m + args.base_delay + (args.robotid - 1) * args.slot + args.tx_offset
         now_m = time.monotonic()
         
+        # Safety check: If the target TX time is already in the past relative to NOW (read_m),
+        # it means the serial latency (rx_delay) is longer than the reserved base_delay + offsets.
+        if read_m > tx_time:
+            if verbose:
+                diff_ms = (read_m - tx_time) * 1000.0
+                print(f"[!] WARNING: Slot is unreachable! Processing finished {diff_ms:.1f}ms AFTER target TX time.")
+                print(f"    Possible fixes: Increase --base-delay (current: {args.base_delay}s) or decrease --rx-delay-ms (current: {args.rx_delay_ms}ms)")
+
         if now_m > tx_time + 0.03:
             if verbose:
                 late_ms = (now_m - beacon_rx_m) * 1000.0
@@ -643,7 +651,7 @@ def parse_args():
     # ap.add_argument("--base-delay", type=float, default=0.25)
     # ap.add_argument("--tx-offset", type=float, default=0.02)
     ap.add_argument("--slot", type=float, default=0.05)
-    ap.add_argument("--base-delay", type=float, default=0.05)
+    ap.add_argument("--base-delay", type=float, default=0.2)
     ap.add_argument("--tx-offset", type=float, default=0.01)
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
 
