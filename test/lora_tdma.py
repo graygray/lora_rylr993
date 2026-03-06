@@ -264,14 +264,14 @@ def run_server(args):
             # Auto-ID Process: Listen for JOIN requests
             # JOIN payloads look like: JOIN:A3F9
             # The length is typically 9 chars: JOIN (4) + : (1) + UUID (4)
-            if data.startswith("JOIN:") and len(data) >= 9:
-                uuid = data[5:9]
+            if isinstance(data, str) and data.startswith("JOIN:") and len(data) >= 9:
+                uuid_str = str(data[5:9])
                 if verbose:
-                    print(f"[*] Heard JOIN request from UUID: {uuid}")
+                    print(f"[*] Heard JOIN request from UUID: {uuid_str}")
                 
                 # Check if already assigned
-                if uuid in auto_id_registry:
-                    assigned_id = auto_id_registry[uuid]
+                if uuid_str in auto_id_registry:
+                    assigned_id = auto_id_registry[uuid_str]
                 else:
                     # Find lowest available ID from args.robots
                     # Example: if robots=[1,2,3,4,5], we need to find one that is NOT in registry
@@ -290,12 +290,12 @@ def run_server(args):
                             print("[!] ERROR: Request received but no available IDs in pool!")
                         continue
                         
-                    auto_id_registry[uuid] = assigned_id
+                    auto_id_registry[uuid_str] = assigned_id
                     if verbose:
-                        print(f"[*] Allocated ID {assigned_id} to UUID {uuid}")
+                        print(f"[*] Allocated ID {assigned_id} to UUID {uuid_str}")
                         
                 # Queue the offer for the next beacon
-                pending_offer = f"_{uuid}:{assigned_id}"
+                pending_offer = f"_{uuid_str}:{assigned_id}"
                 continue
 
             if src not in robots:
@@ -662,8 +662,22 @@ def run_auto_id(args):
     ser = serial.Serial(port, args.baud, timeout=0.1)
     init_radio_robot(ser, args)
 
-    # Listen for a Master beacon to synchronize, and check for an OFFER
-    # We loop until we are assigned an ID.
+    # First Phase: Auto-Role detection
+    # We listen for a beacon just like --auto-role to see if a Master already exists.
+    heard_beacon = listen_for_beacon(ser, args.listen_timeout, not args.quiet)
+    
+    if not heard_beacon:
+        # NO MASTER DETECTED!
+        # We must become the Master ourselves.
+        # Master should always be ID 1.
+        args.robotid = 1
+        ser.close()
+        if not args.quiet:
+            print("====== No Master found. Switching to SERVER mode (ID 1) ======")
+        run_server(args)
+        return
+
+    # Second Phase: A Master exists. We must JOIN.
     assigned_id = None
     rx_delay_s = args.rx_delay_ms / 1000.0
     busy_tail_s = max(0.0, args.busy_tail_ms / 1000.0)
@@ -673,7 +687,7 @@ def run_auto_id(args):
     join_cooldown_frames = random.randint(1, 3)
 
     if not args.quiet:
-        print("[*] Waiting for Master Beacons...")
+        print("[*] Master detected. Waiting for Beacons to send JOIN request...")
 
     while assigned_id is None:
         line = ser.readline().decode(errors="ignore").strip()
@@ -708,11 +722,12 @@ def run_auto_id(args):
         # It's time to send our JOIN request in the designated JOIN slot.
         # The JOIN slot is dynamically calculated as the slot AFTER the last active robot.
         if join_cooldown_frames > 0:
-            join_cooldown_frames -= 1
+            join_cooldown_frames = join_cooldown_frames - 1
             continue
             
         try:
-            frame = int(data[3:7])
+            frame_str = str(data)[3:7]
+            frame = int(frame_str)
         except:
             continue
             
@@ -739,6 +754,9 @@ def run_auto_id(args):
         join_cooldown_frames = random.randint(2, 5)
 
     # We have an assigned ID! Apply it and switch to normal client mode.
+    # Note: Since we are starting via python args, we must technically mark auto_role = True 
+    # so that the failover logic inside run_client() still applies to us.
+    args.auto_role = True
     ser.close()
     
     args.robotid = assigned_id
