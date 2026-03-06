@@ -309,9 +309,15 @@ def run_server(args):
                     # Example: if robots=[1,2,3,4,5], we need to find one that is NOT in registry
                     # but wait, robots list defines total capacity. 
                     # Let's say all IDs in robots list (except master) are available pool.
-                    assigned_id = None
                     used_ids = set(auto_id_registry.values())
-                    used_ids.add(args.robotid) # Server takes its own ID
+                    used_ids.add(args.master) # Server takes its own ID
+                    
+                    # Also consider IDs used if we've heard traffic from them recently
+                    # (This handles robots that were already running if the Master restarts)
+                    for r_id in robots:
+                        if frame_id - last_heard_frame.get(r_id, -100) <= 15:
+                            used_ids.add(r_id)
+
                     for r_id in robots:
                         if r_id not in used_ids:
                             assigned_id = r_id
