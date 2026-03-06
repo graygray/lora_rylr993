@@ -650,13 +650,13 @@ def parse_args():
     # ap.add_argument("--slot", type=float, default=0.1)
     # ap.add_argument("--base-delay", type=float, default=0.25)
     # ap.add_argument("--tx-offset", type=float, default=0.02)
-    ap.add_argument("--slot", type=float, default=0.05)
+    ap.add_argument("--slot", type=float, default=0.08)
     ap.add_argument("--base-delay", type=float, default=0.2)
-    ap.add_argument("--tx-offset", type=float, default=0.01)
+    ap.add_argument("--tx-offset", type=float, default=0.016)
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
 
     # Server Settings
-    ap.add_argument("--robots", default="1-8", help="Comma-separated list (e.g. 2-5) Required for --server or --auto-role or --auto-id")
+    ap.add_argument("--robots", default="1-10", help="Comma-separated list (e.g. 2-5) Required for --server or --auto-role or --auto-id")
     ap.add_argument("--frame", type=float, default=None, help="Frame duration (seconds). If None and --robots set, calculated automatically.")
     ap.add_argument("--warmup", type=int, default=10, help="Warmup frame ignore count (server)")
     ap.add_argument("--print-interval", type=int, default=10, help="Print summary every X frames (server)")
