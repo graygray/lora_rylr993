@@ -633,9 +633,18 @@ def run_client(args):
             
             # When we take over, we MUST act as the new MASTER (address 1)
             # so the remaining clients don't have to change their configuration.
-            # We rewrite args.master to be 1, but we still broadcast to the original robots list.
+            # We rewrite args.master to be 1.
             args.master = 1
             
+            # Exclude ourselves from the robots list so the new server doesn't wait for our own packets
+            if args.robots:
+                r_list = parse_robots(args.robots)
+                if args.robotid in r_list:
+                    r_list.remove(args.robotid)
+                args.robots = ",".join(map(str, r_list))
+                if verbose:
+                    print(f"[*] New robot list for server: {args.robots}")
+
             run_server(args)
             return  # run_server handles the infinite loop from here
 
