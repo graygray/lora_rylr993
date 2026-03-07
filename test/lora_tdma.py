@@ -168,23 +168,36 @@ def lora_airtime_seconds(sf, bw_hz, cr, preamble, payload_bytes):
     t_payload = payload_symb_nb * tsym
     return t_preamble + t_payload
 
-def init_radio_master(ser, args):
+def init_radio(ser: serial.Serial, my_id: int, args):
     verbose = not args.quiet
-    write_cmd(ser, "AT", verbose)
-    time.sleep(0.3)
+    at_collect(ser, "AT", 0.3, verbose)
     write_cmd(ser, "AT+OPMODE=1", verbose)
-    time.sleep(0.5)
-    write_cmd(ser, "ATZ", verbose)
-    time.sleep(2.0)
-    write_cmd(ser, f"AT+ADDRESS={args.master}", verbose)
-    time.sleep(0.5)
-    write_cmd(ser, f"AT+BAND={args.band}", verbose)
-    time.sleep(0.5)
+    time.sleep(0.6)
+
+    need_reset = False
+    while True:
+        l = ser.readline().decode(errors="ignore").strip()
+        if not l:
+            break
+        if verbose:
+            print("[AT]", l)
+        if "Need RESET" in l:
+            need_reset = True
+
+    if need_reset:
+        write_cmd(ser, "ATZ", verbose)
+        wait_ready(ser, 4.0, verbose)
+
     bw_code = parse_bw_to_code(args.bw)
-    write_cmd(ser, f"AT+PARAMETER={args.sf},{bw_code},{args.cr},{args.preamble}", verbose)
-    time.sleep(0.5)
-    write_cmd(ser, f"AT+CRFOP={args.crfop}", verbose)
-    time.sleep(0.5)
+    at_collect(ser, f"AT+ADDRESS={my_id}", 0.5, verbose)
+    at_collect(ser, f"AT+BAND={args.band}", 0.5, verbose)
+    at_collect(ser, f"AT+PARAMETER={args.sf},{bw_code},{args.cr},{args.preamble}", 0.6, verbose)
+    at_collect(ser, f"AT+CRFOP={args.crfop}", 0.5, verbose)
+    at_collect(ser, "AT+PARAMETER=?", 0.8, verbose)
+    drain_uart(ser, 0.8, verbose)
+
+def init_radio_master(ser, args):
+    init_radio(ser, args.master, args)
 
 def run_server(args):
     verbose = not args.quiet
@@ -543,32 +556,7 @@ def sleep_until(deadline_mono: float, busy_tail_s: float = 0.002):
             pass
 
 def init_radio_robot(ser, args):
-    verbose = not args.quiet
-    at_collect(ser, "AT", 0.3, verbose)
-    write_cmd(ser, "AT+OPMODE=1", verbose)
-    time.sleep(0.6)
-
-    need_reset = False
-    while True:
-        l = ser.readline().decode(errors="ignore").strip()
-        if not l:
-            break
-        if verbose:
-            print("[AT]", l)
-        if "Need RESET" in l:
-            need_reset = True
-
-    if need_reset:
-        write_cmd(ser, "ATZ", verbose)
-        wait_ready(ser, 4.0, verbose)
-
-    bw_code = parse_bw_to_code(args.bw)
-    at_collect(ser, f"AT+ADDRESS={args.robotid}", 0.5, verbose)
-    at_collect(ser, f"AT+BAND={args.band}", 0.5, verbose)
-    at_collect(ser, f"AT+PARAMETER={args.sf},{bw_code},{args.cr},{args.preamble}", 0.6, verbose)
-    at_collect(ser, f"AT+CRFOP={args.crfop}", 0.5, verbose)
-    at_collect(ser, "AT+PARAMETER=?", 0.8, verbose)
-    drain_uart(ser, 0.8, verbose)
+    init_radio(ser, args.robotid, args)
 
 def run_client(args):
     verbose = not args.quiet
