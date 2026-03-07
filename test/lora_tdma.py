@@ -636,6 +636,12 @@ def run_client(args):
             run_server(args)
             return  # run_server handles the infinite loop from here
 
+        # Calculate late drop threshold: use parameter or dynamic default
+        if args.late_drop_ms is not None:
+            late_drop_s = args.late_drop_ms / 1000.0
+        else:
+            late_drop_s = min(0.03, args.slot * 0.3)
+
         line = ser.readline().decode(errors="ignore").strip()
         if not line:
             continue
@@ -681,10 +687,10 @@ def run_client(args):
                 print(f"[!] WARNING: Slot is unreachable! Processing finished {diff_ms:.1f}ms AFTER target TX time.")
                 print(f"    Possible fixes: Increase --base-delay (current: {args.base_delay}s) or decrease --rx-delay-ms (current: {args.rx_delay_ms}ms)")
 
-        if now_m > tx_time + 0.03:
+        if now_m > tx_time + late_drop_s:
             if verbose:
                 late_ms = (now_m - beacon_rx_m) * 1000.0
-                print(f"[SKIP] late frame={frame} now-beacon={late_ms:.1f}ms (rx_delay={args.rx_delay_ms:.1f}ms)")
+                print(f"[SKIP] late frame={frame} now-beacon={late_ms:.1f}ms (threshold={late_drop_s*1000:.1f}ms)")
             continue
 
         sleep_until(tx_time, busy_tail_s=busy_tail_s)
@@ -743,7 +749,8 @@ def parse_args():
     ap.add_argument("--payload-bytes", type=int, default=24, help="TX payload size in BYTES (client)")
     ap.add_argument("--rx-delay-ms", type=float, default=160.0, help="RF to serial latency compensation (client)")
     ap.add_argument("--busy-tail-ms", type=float, default=2.0, help="Precise timing busy-wait tail (client)")
-    ap.add_argument("--listen-timeout", type=float, default=4.0, help="Wait time in seconds to detect an existing master for --auto-role")
+    ap.add_argument("--listen-timeout", type=float, default=6.0, help="Wait time in seconds to detect an existing master for --auto-role")
+    ap.add_argument("--late-drop-ms", type=float, default=None, help="Threshold to skip late frames. Defaults to min(30ms, slot*0.3)")
 
     return ap.parse_args()
 
