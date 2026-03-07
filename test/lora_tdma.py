@@ -293,7 +293,7 @@ def run_server(args):
                         125000
 
                 airtime_s = lora_airtime_seconds(
-                    sf=args.sf, bw_hz=bw_hz, cr=args.cr, preamble=args.preamble, payload_bytes=3
+                    sf=args.sf, bw_hz=bw_hz, cr=args.cr, preamble=args.preamble, payload_bytes=args.payload_bytes
                 )
 
                 jitter_span_s = 0.0

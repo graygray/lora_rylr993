@@ -201,6 +201,7 @@ def main():
     ap.add_argument("--slot", type=float, default=0.1)
     ap.add_argument("--base-delay", type=float, default=0.25)
     ap.add_argument("--tx-offset", type=float, default=0.02)
+    ap.add_argument("--payload-bytes", type=int, default=32, help="Payload size for airtime estimation")
 
     ap.add_argument("--warmup", type=int, default=8)
     ap.add_argument("--print-interval", type=int, default=20)
@@ -340,16 +341,21 @@ def main():
                     bw_hz=bw_hz,
                     cr=args.cr,
                     preamble=args.preamble,
-                    payload_bytes=3
+                    payload_bytes=args.payload_bytes
                 )
 
                 # ----- derive jitter span safely from existing stats -----
-
                 jitter_span_s = 0.0
+                jitter_min_s = float("inf")
+                jitter_max_s = float("-inf")
+                for r in robots:
+                    if jitter_stats[r].n > 0:
+                        if jitter_stats[r].min_v < jitter_min_s: jitter_min_s = jitter_stats[r].min_v
+                        if jitter_stats[r].max_v > jitter_max_s: jitter_max_s = jitter_stats[r].max_v
 
                 try:
                     if math.isfinite(jitter_max_s) and math.isfinite(jitter_min_s):
-                        jitter_span_s = max(0.0, jitter_max_s - jitter_min_s)
+                        jitter_span_s = max(0.0, (jitter_max_s - jitter_min_s)/1000.0)
                 except:
                     jitter_span_s = 0.0
 
