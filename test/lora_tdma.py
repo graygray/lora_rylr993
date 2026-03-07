@@ -125,28 +125,28 @@ def parse_payload_hex(data_hex: str):
     except:
         return None
 
-def auto_slot(frame, base, offset, robots, margin, jitter_stats):
-    vals = [jitter_stats[r].max_v for r in robots if math.isfinite(jitter_stats[r].max_v)]
-    worst_j = max(vals) / 1000.0 if vals else 0.0
+def auto_slot(frame, base, offset, robots, margin, slot_offset_stats):
+    vals = [slot_offset_stats[r].max_v for r in robots if math.isfinite(slot_offset_stats[r].max_v)]
+    worst_offset = max(vals) / 1000.0 if vals else 0.0
     
     denom = len(robots) - 1
     if denom <= 0:
         return 0
-    budget = frame - margin - base - offset - worst_j
+    budget = frame - margin - base - offset - worst_offset
     if budget <= 0:
         return 0
     return budget / denom
 
-def auto_frame(slot, base, offset, robots, margin, jitter_stats):
-    vals = [jitter_stats[r].max_v for r in robots if math.isfinite(jitter_stats[r].max_v)]
-    worst_j = max(vals) / 1000.0 if vals else 0.0
+def auto_frame(slot, base, offset, robots, margin, slot_offset_stats):
+    vals = [slot_offset_stats[r].max_v for r in robots if math.isfinite(slot_offset_stats[r].max_v)]
+    worst_offset = max(vals) / 1000.0 if vals else 0.0
     num_robots = len(robots)
-    return base + (num_robots - 1)*slot + offset + worst_j + margin
+    return base + (num_robots - 1)*slot + offset + worst_offset + margin
 
-def auto_max_robots(frame, slot, base, offset, margin, jitter_stats):
-    vals = [jitter_stats[r].max_v for r in jitter_stats if math.isfinite(jitter_stats[r].max_v)]
-    worst_j = max(vals) / 1000.0 if vals else 0.0
-    budget = frame - margin - base - offset - worst_j
+def auto_max_robots(frame, slot, base, offset, margin, slot_offset_stats):
+    vals = [slot_offset_stats[r].max_v for r in slot_offset_stats if math.isfinite(slot_offset_stats[r].max_v)]
+    worst_offset = max(vals) / 1000.0 if vals else 0.0
+    budget = frame - margin - base - offset - worst_offset
     if budget <= 0:
         return 1
     return int(budget / slot) + 1
@@ -231,7 +231,7 @@ def run_server(args):
     
     robot_order = {rid: i for i, rid in enumerate(sorted(robots))}
 
-    jitter_stats: Dict[int, Stats] = {r: Stats() for r in robots}
+    slot_offset_stats: Dict[int, Stats] = {r: Stats() for r in robots}
     beacon_to_rx_stats: Dict[int, Stats] = {r: Stats() for r in robots}
     last_heard_frame: Dict[int, int] = {r: 0 for r in robots}
     joined_at_frame: Dict[int, int] = {r: -1 for r in robots}
@@ -371,7 +371,7 @@ def run_server(args):
                         per_expected[freed_id] = 0
                         per_ok[freed_id] = 0
                         per_mismatch[freed_id] = 0
-                        jitter_stats[freed_id] = Stats()
+                        slot_offset_stats[freed_id] = Stats()
                         beacon_to_rx_stats[freed_id] = Stats()
                         joined_at_frame[freed_id] = -1
                         last_heard_frame[freed_id] = 0
@@ -419,13 +419,13 @@ def run_server(args):
             slot_index = robot_order[src]
             t = now_ms(start)
             expected = (args.base_delay + slot_index * args.slot + args.tx_offset) * 1000.0
-            jitter = t - expected
+            slot_offset = t - expected
 
             pp = parse_payload_hex(data)
             if not pp:
                 if args.verbose_log:
                     print(f"[RX BAD] frame={frame_id} from={src} "
-                          f"t={t:.1f}ms exp={expected:.1f}ms jitter={jitter:.1f}ms raw={data[:16]}...")
+                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms raw={data[:16]}...")
                 continue
 
             rid, fid, dpart = pp
@@ -441,19 +441,19 @@ def run_server(args):
             # 8-bit sequence number rollover sync
             if fid == (frame_id % 256):
                 received.add(src)
-                jitter_stats[src].add(jitter)
+                slot_offset_stats[src].add(slot_offset)
                 beacon_to_rx_stats[src].add(t)
                 if joined_at_frame[src] != -1 and frame_id > joined_at_frame[src] + args.warmup:
                     per_ok[src] += 1
                 if args.verbose_log:
                     print(f"[RX OK] frame={frame_id} from={src} "
-                          f"t={t:.1f}ms exp={expected:.1f}ms jitter={jitter:.1f}ms rid={rid}")
+                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms rid={rid}")
             else:
                 if joined_at_frame[src] != -1 and frame_id > joined_at_frame[src] + args.warmup:
                     per_mismatch[src] += 1
                 if args.verbose_log:
                     print(f"[RX MISMATCH] expect={frame_id % 256} got={fid} from={src} "
-                          f"t={t:.1f}ms exp={expected:.1f}ms jitter={jitter:.1f}ms rid={rid}")
+                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms rid={rid}")
 
         for r in robots:
             if r != args.robotid and joined_at_frame[r] != -1:
@@ -473,7 +473,7 @@ def run_server(args):
                 per = (e-ok)/e if e else 0
                 print(f"Robot {r}: OK={ok}/{e} PER={per*100:.3f}% mismatch={per_mismatch[r]}")
                 print("  BEACON_TO_RX:", beacon_to_rx_stats[r].fmt())
-                print("  JITTER      :", jitter_stats[r].fmt())
+                print("  SLOT_OFFSET :", slot_offset_stats[r].fmt())
                 total_ok += ok
                 total_e += e
 
@@ -481,9 +481,9 @@ def run_server(args):
             print(f"GLOBAL PER = {gper*100:.3f}%")
 
             if args.auto_calc:
-                rec_slot = auto_slot(args.frame, args.base_delay, args.tx_offset, robots, args.margin, jitter_stats)
-                rec_frame = auto_frame(args.slot, args.base_delay, args.tx_offset, robots, args.margin, jitter_stats)
-                rec_max = auto_max_robots(args.frame, args.slot, args.base_delay, args.tx_offset, args.margin, jitter_stats)
+                rec_slot = auto_slot(args.frame, args.base_delay, args.tx_offset, robots, args.margin, slot_offset_stats)
+                rec_frame = auto_frame(args.slot, args.base_delay, args.tx_offset, robots, args.margin, slot_offset_stats)
+                rec_max = auto_max_robots(args.frame, args.slot, args.base_delay, args.tx_offset, args.margin, slot_offset_stats)
 
                 print("\n---- AUTO CALC ----")
                 print(f"Recommended slot <= {rec_slot*1000:.1f} ms")
@@ -498,22 +498,22 @@ def run_server(args):
                     sf=args.sf, bw_hz=bw_hz, cr=args.cr, preamble=args.preamble, payload_bytes=args.payload_bytes
                 )
 
-                jitter_span_s = 0.0
-                # Using overall jitter range since auto minimum
-                jitter_min_s = float("inf")
-                jitter_max_s = float("-inf")
+                offset_span_s = 0.0
+                # Using overall offset range since auto minimum
+                offset_min_s = float("inf")
+                offset_max_s = float("-inf")
                 for r in robots:
-                    if jitter_stats[r].n > 0:
-                        if jitter_stats[r].min_v < jitter_min_s: jitter_min_s = jitter_stats[r].min_v
-                        if jitter_stats[r].max_v > jitter_max_s: jitter_max_s = jitter_stats[r].max_v
+                    if slot_offset_stats[r].n > 0:
+                        if slot_offset_stats[r].min_v < offset_min_s: offset_min_s = slot_offset_stats[r].min_v
+                        if slot_offset_stats[r].max_v > offset_max_s: offset_max_s = slot_offset_stats[r].max_v
                 try:
-                    if math.isfinite(jitter_max_s) and math.isfinite(jitter_min_s):
-                        jitter_span_s = max(0.0, (jitter_max_s - jitter_min_s)/1000.0)
+                    if math.isfinite(offset_max_s) and math.isfinite(offset_min_s):
+                        offset_span_s = max(0.0, (offset_max_s - offset_min_s)/1000.0)
                 except:
-                    jitter_span_s = 0.0
+                    offset_span_s = 0.0
 
                 guard_s = 0.010
-                min_slot_s = airtime_s + jitter_span_s + guard_s
+                min_slot_s = airtime_s + offset_span_s + guard_s
 
                 print(f"Minimum slot needed ≥ {min_slot_s*1000:.1f} ms")
                 print("-------------------")
