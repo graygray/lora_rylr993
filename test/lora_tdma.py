@@ -282,9 +282,6 @@ def run_server(args):
                 continue
 
             line = read_line(ser)
-            if not line.startswith("+RCV="):
-                continue
-
             r = parse_rcv(line)
             if not r:
                 continue
