@@ -129,8 +129,7 @@ def auto_slot(frame, base, offset, robots, margin, jitter_stats):
     vals = [jitter_stats[r].max_v for r in robots if math.isfinite(jitter_stats[r].max_v)]
     worst_j = max(vals) / 1000.0 if vals else 0.0
     
-    max_id = max(robots) if robots else 1
-    denom = max_id - 1
+    denom = len(robots) - 1
     if denom <= 0:
         return 0
     budget = frame - margin - base - offset - worst_j
@@ -141,8 +140,8 @@ def auto_slot(frame, base, offset, robots, margin, jitter_stats):
 def auto_frame(slot, base, offset, robots, margin, jitter_stats):
     vals = [jitter_stats[r].max_v for r in robots if math.isfinite(jitter_stats[r].max_v)]
     worst_j = max(vals) / 1000.0 if vals else 0.0
-    max_id = max(robots) if robots else 1
-    return base + (max_id - 1)*slot + offset + worst_j + margin
+    num_robots = len(robots)
+    return base + (num_robots - 1)*slot + offset + worst_j + margin
 
 def auto_max_robots(frame, slot, base, offset, margin, jitter_stats):
     vals = [jitter_stats[r].max_v for r in jitter_stats if math.isfinite(jitter_stats[r].max_v)]
@@ -194,10 +193,10 @@ def run_server(args):
     if args.frame is None:
         # Formula from user: min_frame = base + (N-1)*slot + tx_offset + jitter_max + guard
         # Using jitter_max = 0.0018 (constant from image) and margin as guard (0.03)
-        max_id = max(robots) if robots else 1
-        args.frame = args.base_delay + (max_id - 1) * args.slot + args.tx_offset + 0.0018 + args.margin
+        num_robots = len(robots)
+        args.frame = args.base_delay + (num_robots - 1) * args.slot + args.tx_offset + 0.0018 + args.margin
         if verbose:
-            print(f"[AUTO-FRAME] Calculated frame duration: {args.frame:.4f}s for N={max_id} robots")
+            print(f"[AUTO-FRAME] Calculated frame duration: {args.frame:.4f}s for N={num_robots} robots")
             print(f"             (base={args.base_delay} slot={args.slot} off={args.tx_offset} jitter=0.0018 guard={args.margin})")
 
     port = resolve_port(args.port)
@@ -216,6 +215,8 @@ def run_server(args):
     per_expected: Dict[int, int] = {r: 0 for r in robots}
     per_ok: Dict[int, int] = {r: 0 for r in robots}
     per_mismatch: Dict[int, int] = {r: 0 for r in robots}
+    
+    robot_order = {rid: i for i, rid in enumerate(sorted(robots))}
 
     jitter_stats: Dict[int, Stats] = {r: Stats() for r in robots}
     rtt_stats: Dict[int, Stats] = {r: Stats() for r in robots}
@@ -402,8 +403,9 @@ def run_server(args):
             if src not in robots or src == args.robotid:
                 continue
 
+            slot_index = robot_order[src]
             t = now_ms(start)
-            expected = (args.base_delay + (src-1)*args.slot + args.tx_offset) * 1000.0
+            expected = (args.base_delay + slot_index * args.slot + args.tx_offset) * 1000.0
             jitter = t - expected
 
             pp = parse_payload_hex(data)
@@ -575,10 +577,10 @@ def run_client(args):
     if args.frame is None:
         if args.robots:
             robots = parse_robots(args.robots)
-            max_id = max(robots) if robots else 1
-            args.frame = args.base_delay + (max_id - 1) * args.slot + args.tx_offset + 0.0018 + args.margin
+            num_robots = len(robots)
+            args.frame = args.base_delay + (num_robots - 1) * args.slot + args.tx_offset + 0.0018 + args.margin
             if verbose:
-                print(f"[AUTO-FRAME] Calculated frame duration: {args.frame:.4f}s for N={max_id} robots")
+                print(f"[AUTO-FRAME] Calculated frame duration: {args.frame:.4f}s for N={num_robots} robots")
         else:
             args.frame = 1.5 # Legacy default fallback
             if verbose:
@@ -665,7 +667,13 @@ def run_client(args):
 
         read_m = time.monotonic()
         beacon_rx_m = read_m - rx_delay_s
-        tx_time = beacon_rx_m + args.base_delay + (args.robotid - 1) * args.slot + args.tx_offset
+        
+        # Rank-based slot index
+        robots = parse_robots(args.robots)
+        robot_order = {rid: i for i, rid in enumerate(sorted(robots))}
+        slot_index = robot_order[args.robotid]
+        
+        tx_time = beacon_rx_m + args.base_delay + slot_index * args.slot + args.tx_offset
         now_m = time.monotonic()
         
         # Safety check: If the target TX time is already in the past relative to NOW (read_m),
@@ -933,8 +941,8 @@ def main():
             sys.exit(2)
         run_server(args)
     elif args.client:
-        if not args.robotid:
-            print("[ERR] --robotid is required when running as --client")
+        if not args.robotid or not args.robots:
+            print("[ERR] Both --robotid and --robots are required when running as --client")
             sys.exit(2)
         if args.robotid <= 0 or args.robotid > 15:
             print("[ERR] --robotid must be 1..15 for the 1-character HEX ID format.")
