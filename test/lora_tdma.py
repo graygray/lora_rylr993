@@ -232,7 +232,7 @@ def run_server(args):
     robot_order = {rid: i for i, rid in enumerate(sorted(robots))}
 
     jitter_stats: Dict[int, Stats] = {r: Stats() for r in robots}
-    rtt_stats: Dict[int, Stats] = {r: Stats() for r in robots}
+    beacon_to_rx_stats: Dict[int, Stats] = {r: Stats() for r in robots}
     last_heard_frame: Dict[int, int] = {r: 0 for r in robots}
     joined_at_frame: Dict[int, int] = {r: -1 for r in robots}
 
@@ -372,7 +372,7 @@ def run_server(args):
                         per_ok[freed_id] = 0
                         per_mismatch[freed_id] = 0
                         jitter_stats[freed_id] = Stats()
-                        rtt_stats[freed_id] = Stats()
+                        beacon_to_rx_stats[freed_id] = Stats()
                         joined_at_frame[freed_id] = -1
                         last_heard_frame[freed_id] = 0
 
@@ -442,7 +442,7 @@ def run_server(args):
             if fid == (frame_id % 256):
                 received.add(src)
                 jitter_stats[src].add(jitter)
-                rtt_stats[src].add(t)
+                beacon_to_rx_stats[src].add(t)
                 if joined_at_frame[src] != -1 and frame_id > joined_at_frame[src] + args.warmup:
                     per_ok[src] += 1
                 if args.verbose_log:
@@ -472,8 +472,8 @@ def run_server(args):
                 ok = per_ok[r]
                 per = (e-ok)/e if e else 0
                 print(f"Robot {r}: OK={ok}/{e} PER={per*100:.3f}% mismatch={per_mismatch[r]}")
-                print("  RTT   :", rtt_stats[r].fmt())
-                print("  JITTER:", jitter_stats[r].fmt())
+                print("  BEACON_TO_RX:", beacon_to_rx_stats[r].fmt())
+                print("  JITTER      :", jitter_stats[r].fmt())
                 total_ok += ok
                 total_e += e
 
