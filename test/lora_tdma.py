@@ -607,9 +607,15 @@ def parse_rcv(line: str) -> Optional[Tuple[int, int, str, int, int]]:
     if not line.startswith("+RCV="):
         return None
     try:
-        p = line[5:].split(",", 4)
-        src = int(p[0]); ln = int(p[1]); data = p[2]
-        rssi = int(p[3]); snr = int(p[4])
+        p = line[5:].split(",")
+        if len(p) < 5:
+            return None
+        src = int(p[0])
+        ln = int(p[1])
+        # Data is everything between source/length and RSSI/SNR
+        data = ",".join(p[2:-2])
+        rssi = int(p[-2])
+        snr = int(p[-1])
         return src, ln, data, rssi, snr
     except:
         return None
