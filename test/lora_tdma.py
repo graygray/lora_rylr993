@@ -139,21 +139,25 @@ def parse_beacon(data: str):
             "relay_str": ""
         }
         
-        # Parse offer: uuid:id
-        if len(parts) > 3 and ":" in parts[3]:
-            o_parts = parts[3].split(":", 1)
-            res["offer_uuid"] = o_parts[0]
-            res["offer_id"] = int(o_parts[1])
+        # Strictly treat parts[3] as offer field if it exists
+        if len(parts) > 3:
+            offer_field = parts[3]
+            if offer_field and ":" in offer_field:
+                try:
+                    o_parts = offer_field.split(":", 1)
+                    if len(o_parts) == 2:
+                        res["offer_uuid"] = o_parts[0]
+                        res["offer_id"] = int(o_parts[1])
+                except (ValueError, IndexError):
+                    # Malformed offer shouldn't kill the whole beacon
+                    pass
             
-        # Relays: everything from index 4 onwards
+        # Relays: strictly from index 4 onwards
         if len(parts) > 4:
-            # We keep relay_str as a delimiter-separated string for compatibility
-            # but we use '+' internally if the external protocol uses ','
-            # Actually, let's just join them with '+' so existing relay logic (if any) works
             res["relay_str"] = "+".join(parts[4:])
             
         return res
-    except:
+    except (ValueError, IndexError):
         return None
 
 # ============================================================
@@ -757,6 +761,11 @@ def run_client(args):
         # Rank-based slot index
         robots = parse_robots(args.robots)
         robot_order = {rid: i for i, rid in enumerate(sorted(robots))}
+        if args.robotid not in robot_order:
+            if verbose:
+                print(f"[ERR] robotid {args.robotid} not in robots list {args.robots}")
+            time.sleep(1) # Slow down to avoid spamming
+            continue
         slot_index = robot_order[args.robotid]
         
         tx_time = beacon_rx_m + args.base_delay + slot_index * args.slot + args.tx_offset
@@ -898,10 +907,8 @@ def run_auto_id(args):
     
     port = resolve_port(args.port)
     
-    # Temporarily set robotid to an unassigned very high value (e.g., 255)
+    # Temporarily set robotid to an unassigned very high value
     # just so we can initialize the radio without conflicting with normal robots.
-    # The actual network allows ID 0-65535.
-    original_id = args.robotid
     args.robotid = random.randint(30000, 60000) 
     
     if not args.quiet:
@@ -947,14 +954,14 @@ def run_auto_id(args):
         if not r:
             continue
 
-        src, ln, data, rssi, snr = r
+        # We only need the payload data for beacon parsing
+        _, _, data, _, _ = r
         
         b = parse_beacon(data)
         if not b:
             continue
 
         frame = b["frame"]
-        other_uuid = b["uuid"]
         offer_uuid = b["offer_uuid"]
         offered_id = b["offer_id"]
 

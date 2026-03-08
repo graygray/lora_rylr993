@@ -34,19 +34,25 @@ def parse_beacon(data: str):
             "relay_str": ""
         }
         
-        # Parse offer: uuid:id
-        if len(parts) > 3 and ":" in parts[3]:
-            o_parts = parts[3].split(":", 1)
-            res["offer_uuid"] = o_parts[0]
-            res["offer_id"] = int(o_parts[1])
+        # Strictly treat parts[3] as offer field if it exists
+        if len(parts) > 3:
+            offer_field = parts[3]
+            if offer_field and ":" in offer_field:
+                try:
+                    o_parts = offer_field.split(":", 1)
+                    if len(o_parts) == 2:
+                        res["offer_uuid"] = o_parts[0]
+                        res["offer_id"] = int(o_parts[1])
+                except (ValueError, IndexError):
+                    # Malformed offer shouldn't kill the whole beacon
+                    pass
             
-        # Relays: everything from index 4 onwards
+        # Relays: strictly from index 4 onwards
         if len(parts) > 4:
-            # We keep relay_str as a delimiter-separated string for compatibility
             res["relay_str"] = "+".join(parts[4:])
             
         return res
-    except:
+    except (ValueError, IndexError):
         return None
 
 def make_beacon(frame_id: int, uuid: str = "", offer_uuid: str = None, offer_id: int = None, relay_map: Dict[int, str] = None, max_len: int = 242) -> str:
