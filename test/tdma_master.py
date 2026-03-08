@@ -49,24 +49,29 @@ def parse_beacon(data: str):
     except:
         return None
 
-def make_beacon(frame_id: int, uuid: str = "", offer_uuid: str = None, offer_id: int = None, relay_map: Dict[int, str] = None) -> str:
+def make_beacon(frame_id: int, uuid: str = "", offer_uuid: str = None, offer_id: int = None, relay_map: Dict[int, str] = None, max_len: int = 242) -> str:
     """
     Constructs a structured beacon: BCN,frame,uuid,offer_uuid:offer_id,relay_id:data,relay_id:data...
+    Iteratively adds relay items while within max_len.
     """
     offer_str = ""
     if offer_uuid and offer_id is not None:
         offer_str = f"{offer_uuid}:{offer_id}"
     
-    relay_parts = []
+    parts = ["BCN", f"{frame_id:04d}", uuid or "", offer_str]
+    current_beacon = ",".join(parts)
+    
     if relay_map:
         for rid in sorted(relay_map.keys()):
-            relay_parts.append(f"{rid:x}:{relay_map[rid]}")
-    
-    # Format: BCN,frame,uuid,offer,relay1,relay2...
-    parts = ["BCN", f"{frame_id:04d}", uuid or "", offer_str]
-    if relay_parts:
-        parts.extend(relay_parts)
-    return ",".join(parts)
+            item = f"{rid:x}:{relay_map[rid]}"
+            potential_len = len(current_beacon) + 1 + len(item)
+            if potential_len <= max_len:
+                parts.append(item)
+                current_beacon = ",".join(parts)
+            else:
+                break
+                
+    return current_beacon
 
 def parse_rcv(line: str):
     if not line.startswith("+RCV="):

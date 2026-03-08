@@ -90,24 +90,34 @@ def drain_uart(ser: serial.Serial, seconds: float, verbose: bool):
 # Shared Utilities & Beacon Parsing
 # ============================================================
 
-def make_beacon(frame_id: int, uuid: str, offer_uuid: Optional[str] = None, offer_id: Optional[int] = None, relay_map: Optional[Dict[int, str]] = None) -> str:
+def make_beacon(frame_id: int, uuid: str, offer_uuid: Optional[str] = None, offer_id: Optional[int] = None, relay_map: Optional[Dict[int, str]] = None, max_len: int = 242) -> str:
     """
     Constructs a structured beacon: BCN,frame,uuid,offer_uuid:offer_id,relay_id:data,relay_id:data...
+    Iteratively adds relay items while within max_len.
     """
     offer_str = ""
     if offer_uuid and offer_id is not None:
         offer_str = f"{offer_uuid}:{offer_id}"
     
-    relay_parts = []
+    parts = ["BCN", f"{frame_id:04d}", uuid or "", offer_str]
+    
+    # Calculate base length with commas
+    # join(",") adds len(parts)-1 commas
+    current_beacon = ",".join(parts)
+    
     if relay_map:
         for rid in sorted(relay_map.keys()):
-            relay_parts.append(f"{rid:x}:{relay_map[rid]}")
-    
-    # Format: BCN,frame,uuid,offer,relay1,relay2...
-    parts = ["BCN", f"{frame_id:04d}", uuid or "", offer_str]
-    if relay_parts:
-        parts.extend(relay_parts)
-    return ",".join(parts)
+            item = f"{rid:x}:{relay_map[rid]}"
+            # Potential new beacon: existing + comma + item
+            potential_len = len(current_beacon) + 1 + len(item)
+            if potential_len <= max_len:
+                parts.append(item)
+                current_beacon = ",".join(parts)
+            else:
+                # MTU Reached
+                break
+                
+    return current_beacon
 
 def parse_beacon(data: str):
     """
@@ -336,17 +346,10 @@ def run_server(args):
             uuid=my_uuid,
             offer_uuid=pending_offer_uuid,
             offer_id=pending_offer_id,
-            relay_map=relay_pool
+            relay_map=relay_pool,
+            max_len=242
         )
         
-        # LoRa RYLR993 / AT+SEND typically has a 242-byte limit
-        if len(beacon) > 242:
-            if not args.quiet:
-                print(f"[WRN] Beacon length ({len(beacon)}) exceeds 242 limit! Truncating aggregated data.")
-            # We don't want to just slice a comma-separated string blindly if we can help it,
-            # but for now we follow the existing truncation logic.
-            beacon = beacon[:242]
-
         write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}", verbose=not args.quiet)
         
         # Clear the offer and relay pool after sending
