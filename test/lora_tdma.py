@@ -202,6 +202,7 @@ def init_radio_master(ser, args):
 def run_server(args):
     verbose = not args.quiet
     robots = parse_robots(args.robots)
+    server_id = args.master
     
     if args.frame is None:
         # Formula from user: min_frame = base + (N-1)*slot + tx_offset + jitter_max + guard
@@ -324,9 +325,9 @@ def run_server(args):
                     #   - The other ID is THE SAME but their UUID is lower (lexicographical)
                     
                     should_yield = False
-                    if src < args.robotid: 
+                    if src < server_id: 
                         should_yield = True
-                    elif src == args.robotid:
+                    elif src == server_id:
                         if other_uuid and other_uuid < my_uuid:
                             should_yield = True
                     
@@ -339,7 +340,7 @@ def run_server(args):
                         return
                     else:
                         if verbose:
-                            print(f"[*] I have higher priority (my ID: {args.robotid}, UUID: {my_uuid}). Ignoring imposter ID {src}.")
+                            print(f"[*] I have higher priority (my ID: {server_id}, UUID: {my_uuid}). Ignoring imposter ID {src}.")
                 except ValueError:
                     pass
                 continue
@@ -413,7 +414,7 @@ def run_server(args):
                 pending_offer = f"_{uuid_str}:{assigned_id}"
                 continue
 
-            if src not in robots or src == args.robotid:
+            if src not in robots or src == server_id:
                 continue
 
             slot_index = robot_order[src]
@@ -456,7 +457,7 @@ def run_server(args):
                           f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms rid={rid}")
 
         for r in robots:
-            if r != args.robotid and joined_at_frame[r] != -1:
+            if r != server_id and joined_at_frame[r] != -1:
                 # Per-robot warmup: start counting expected after joined_at_frame + warmup
                 if frame_id > joined_at_frame[r] + args.warmup:
                     per_expected[r] = per_expected.get(r, 0) + 1
@@ -466,7 +467,7 @@ def run_server(args):
             total_ok = 0
             total_e = 0
             for r in robots:
-                if joined_at_frame[r] == -1 or r == args.robotid:
+                if joined_at_frame[r] == -1 or r == server_id:
                     continue
                 e = per_expected[r]
                 ok = per_ok[r]
