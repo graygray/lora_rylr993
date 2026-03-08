@@ -340,7 +340,7 @@ def run_server(args):
         
         frame_id += 1
         if frame_id > 9999:
-            frame_id = frame_id % 10000
+            frame_id = 1
             
         beacon = make_beacon(
             frame_id=frame_id,

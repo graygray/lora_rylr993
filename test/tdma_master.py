@@ -329,7 +329,7 @@ def main():
         start = time.monotonic()
 
         if frame_id > 9999:
-            frame_id = frame_id % 10000
+            frame_id = 1
         beacon = make_beacon(frame_id)
         write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}")
 
