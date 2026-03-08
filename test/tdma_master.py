@@ -22,18 +22,12 @@ def parse_rcv(line: str):
         return None
 
 def parse_payload_hex(data_hex: str):
-    """
-    robot payload hex format:
-      rid: 1 byte  (2 hex chars)
-      fid: 2 bytes (4 hex chars, big-endian)
-    total >= 6 hex chars
-    """
-    if not data_hex or len(data_hex) < 6:
+    if not data_hex or len(data_hex) < 2:
         return None
     try:
-        rid = int(data_hex[0:2], 16)
-        fid = int(data_hex[2:6], 16)
-        return rid, fid
+        # Format: 2 hex char Seq (00-FF)
+        fid = int(data_hex[0:2], 16)
+        return fid
     except:
         return None
 
@@ -298,30 +292,27 @@ def main():
             slot_offset_stats[src].add(slot_offset)
             beacon_to_rx_stats[src].add(t)
 
-            pp = parse_payload_hex(data)
-            if not pp:
+            fid = parse_payload_hex(data)
+            if fid is None:
                 if args.verbose_log:
                     print(f"[RX BAD] frame={frame_id} from={src} "
                           f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms raw={data[:16]}...")
                 continue
 
-            rid, fid = pp
-
             # NOTE: src is LoRa ADDRESS; use src for routing (keep your PER structure)
-            # rid is embedded by robot; we can sanity-check but don't rely on it
             if fid == frame_id:
                 received.add(src)
                 if frame_id > args.warmup:
                     per_ok[src] += 1
                 if args.verbose_log:
                     print(f"[RX OK] frame={frame_id} from={src} "
-                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms rid={rid}")
+                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms")
             else:
                 if frame_id > args.warmup:
                     per_mismatch[src] += 1
                 if args.verbose_log:
                     print(f"[RX MISMATCH] expect={frame_id} got={fid} from={src} "
-                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms rid={rid}")
+                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms")
 
         if frame_id > args.warmup:
             for r in robots:

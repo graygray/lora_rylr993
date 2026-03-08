@@ -114,14 +114,13 @@ class Stats:
         return f"n={self.n} min={self.min_v:.1f}ms avg={self.avg():.1f}ms max={self.max_v:.1f}ms"
 
 def parse_payload_hex(data_hex: str):
-    if not data_hex or len(data_hex) < 3:
+    if not data_hex or len(data_hex) < 2:
         return None
     try:
-        # Format: 1 hex char ID (0-F), 2 hex char Seq (00-FF)
-        rid = int(data_hex[0:1], 16)
-        fid = int(data_hex[1:3], 16)
-        data_part = data_hex[3:]
-        return rid, fid, data_part
+        # Format: 2 hex char Seq (00-FF)
+        fid = int(data_hex[0:2], 16)
+        data_part = data_hex[2:]
+        return fid, data_part
     except:
         return None
 
@@ -429,7 +428,7 @@ def run_server(args):
                           f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms raw={data[:16]}...")
                 continue
 
-            rid, fid, dpart = pp
+            fid, dpart = pp
             
             # If we successfully parsed a payload from them, update their lease!
             last_heard_frame[src] = frame_id
@@ -448,13 +447,13 @@ def run_server(args):
                     per_ok[src] += 1
                 if args.verbose_log:
                     print(f"[RX OK] frame={frame_id} from={src} "
-                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms rid={rid}")
+                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms")
             else:
                 if joined_at_frame[src] != -1 and frame_id > joined_at_frame[src] + args.warmup:
                     per_mismatch[src] += 1
                 if args.verbose_log:
                     print(f"[RX MISMATCH] expect={frame_id % 256} got={fid} from={src} "
-                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms rid={rid}")
+                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms")
 
         for r in robots:
             if r != server_id and joined_at_frame[r] != -1:
@@ -537,13 +536,13 @@ def parse_rcv(line: str) -> Optional[Tuple[int, int, str, int, int]]:
         return None
 
 def make_payload_ascii(my_id: int, frame_id: int, payload_bytes: int) -> str:
-    if payload_bytes < 3:
-        raise ValueError("--payload-bytes must be >= 3.")
-    # ID is 1 char (0-15), Seq is 2 chars (0-255 rollover)
-    id_char = f"{(my_id & 0xF):1x}"
-    header = f"{id_char}{(frame_id % 256):02x}"
-    dummy_len = payload_bytes - 3
-    return header + (id_char * dummy_len)
+    if payload_bytes < 2:
+        raise ValueError("--payload-bytes must be >= 2.")
+    # Seq is 2 chars (0-255 rollover)
+    header = f"{(frame_id % 256):02x}"
+    dummy_len = payload_bytes - 2
+    # Fill with 'x' or similar dummy data
+    return header + ("x" * dummy_len)
 
 def sleep_until(deadline_mono: float, busy_tail_s: float = 0.002):
     while True:
@@ -949,11 +948,11 @@ def main():
         if not args.robotid or not args.robots:
             print("[ERR] Both --robotid and --robots are required when running as --client")
             sys.exit(2)
-        if args.robotid <= 0 or args.robotid > 15:
-            print("[ERR] --robotid must be 1..15 for the 1-character HEX ID format.")
+        if args.robotid <= 0 or args.robotid > 65535:
+            print("[ERR] --robotid must be 1..65535 (LoRa Address Range)")
             sys.exit(2)
-        if args.payload_bytes < 3:
-            print("[ERR] --payload-bytes must be >= 3")
+        if args.payload_bytes < 2:
+            print("[ERR] --payload-bytes must be >= 2")
             sys.exit(2)
         run_client(args)
     elif args.auto_role:
