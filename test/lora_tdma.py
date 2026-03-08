@@ -304,7 +304,7 @@ def run_server(args):
 
     slot_offset_stats: Dict[int, Stats] = {r: Stats() for r in robots}
     beacon_to_rx_stats: Dict[int, Stats] = {r: Stats() for r in robots}
-    last_heard_frame: Dict[int, int] = {r: 0 for r in robots}
+    last_heard_mono: Dict[int, float] = {r: time.monotonic() for r in robots}
     joined_at_frame: Dict[int, int] = {r: -1 for r in robots}
 
     frame_id = 0
@@ -430,13 +430,13 @@ def run_server(args):
                     # We need a list to avoid modifying dict while iterating
                     dead_uuids = []
                     for reg_uuid, reg_id in auto_id_registry.items():
-                        if frame_id - last_heard_frame.get(reg_id, 0) > 15:
+                        if time.monotonic() - last_heard_mono.get(reg_id, 0) > 30:
                             dead_uuids.append(reg_uuid)
                     
                     for dead in dead_uuids:
                         freed_id = auto_id_registry.pop(dead)
                         if verbose:
-                            print(f"[*] Reclaiming inactive ID {freed_id} from UUID {dead} (Silent for >15 frames)")
+                            print(f"[*] Reclaiming inactive ID {freed_id} from UUID {dead} (Silent for >30s)")
                         # Reset stats for the reclaimed ID
                         per_expected[freed_id] = 0
                         per_ok[freed_id] = 0
@@ -444,7 +444,7 @@ def run_server(args):
                         slot_offset_stats[freed_id] = Stats()
                         beacon_to_rx_stats[freed_id] = Stats()
                         joined_at_frame[freed_id] = -1
-                        last_heard_frame[freed_id] = 0
+                        last_heard_mono[freed_id] = 0
 
                     # Find lowest available ID from args.robots
                     # Example: if robots=[1,2,3,4,5], we need to find one that is NOT in registry
@@ -457,7 +457,7 @@ def run_server(args):
                     # Also consider IDs used if we've heard traffic from them recently
                     # (This handles robots that were already running if the Master restarts)
                     for r_id in robots:
-                        if frame_id - last_heard_frame.get(r_id, -100) <= 15:
+                        if time.monotonic() - last_heard_mono.get(r_id, 0) <= 30:
                             used_ids.add(r_id)
 
                     for r_id in robots:
@@ -472,8 +472,8 @@ def run_server(args):
                         
                     auto_id_registry[uuid_str] = assigned_id
                     
-                    # IMPORTANT: Initialize the lease timer so we don't immediately revoke it next frame
-                    last_heard_frame[assigned_id] = frame_id
+                    # IMPORTANT: Initialize the lease timer so we don't immediately revoke it
+                    last_heard_mono[assigned_id] = time.monotonic()
                     joined_at_frame[assigned_id] = frame_id
                     
                     if verbose:
@@ -510,7 +510,7 @@ def run_server(args):
             fid, dpart = pp
             
             # If we successfully parsed a payload from them, update their lease!
-            last_heard_frame[src] = frame_id
+            last_heard_mono[src] = time.monotonic()
             if joined_at_frame[src] == -1:
                 joined_at_frame[src] = frame_id
             
