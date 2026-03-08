@@ -87,6 +87,47 @@ def drain_uart(ser: serial.Serial, seconds: float, verbose: bool):
             print("[DRAIN]", l)
 
 # ============================================================
+# Shared Utilities & Beacon Parsing
+# ============================================================
+
+def parse_beacon(data: str):
+    """
+    Parse BCNxxxx@UUID_offer+relays
+    Returns: {frame, uuid, offer_uuid, offer_id, relay_str} or None
+    """
+    if not (data.startswith("BCN") and len(data) >= 7):
+        return None
+    try:
+        res = {
+            "frame": int(data[3:7]),
+            "uuid": "",
+            "offer_uuid": None,
+            "offer_id": None,
+            "relay_str": ""
+        }
+        rem = data[7:]
+        if rem.startswith("@"):
+            # @UUID_offer+relay
+            res["uuid"] = rem[1:5]
+            rem = rem[5:]
+            
+            if rem.startswith("_"):
+                # _UUID:ID+relay
+                parts = rem[1:].split("+", 1)
+                offer_part = parts[0]
+                if ":" in offer_part:
+                    o_uuid, o_id = offer_part.split(":", 1)
+                    res["offer_uuid"] = o_uuid
+                    res["offer_id"] = int(o_id)
+                if len(parts) > 1:
+                    res["relay_str"] = parts[1]
+            elif rem.startswith("+"):
+                res["relay_str"] = rem[1:]
+        return res
+    except:
+        return None
+
+# ============================================================
 # Master Utilities & Logic
 # ============================================================
 
@@ -302,46 +343,35 @@ def run_server(args):
             
             src, ln, data, rssi, snr = r
 
-            # Dual-server conflict resolution:
-            # If we are the Server but we hear a Beacon from someone else...
-            if data.startswith("BCN") and len(data) >= 7:
-                try:
-                    other_frame = int(data[3:7])
-                    other_uuid = ""
-                    if "@" in data:
-                        # BCNxxxx@UUID...
-                        at_idx = data.find("@")
-                        other_uuid = data[at_idx+1 : at_idx+5]
-
-                    if verbose:
-                        print(f"[!] WARNING: Heard BCN{other_frame:04d}@{other_uuid} from ID {src}! Dual-server conflict detected.")
-                    
-                    # Tie-breaker logic:
-                    # 1. Lower ID wins (1 is highest priority).
-                    # 2. If IDs are the same, lower UUID wins.
-                    # We yield if:
-                    #   - The other ID is lower than ours (e.g. ID 1 vs ID 2)
-                    #   - The other ID is THE SAME but their UUID is lower (lexicographical)
-                    
-                    should_yield = False
-                    if src < server_id: 
+            # Dual-server conflict resolution
+            b = parse_beacon(data)
+            if b:
+                other_frame = b["frame"]
+                other_uuid = b["uuid"]
+                
+                if verbose:
+                    print(f"[!] WARNING: Heard BCN{other_frame:04d}@{other_uuid} from ID {src}! Dual-server conflict detected.")
+                
+                # Tie-breaker logic:
+                # 1. Lower ID wins.
+                # 2. If IDs same, lower UUID wins.
+                should_yield = False
+                if src < server_id:
+                    should_yield = True
+                elif src == server_id:
+                    if other_uuid and other_uuid < my_uuid:
                         should_yield = True
-                    elif src == server_id:
-                        if other_uuid and other_uuid < my_uuid:
-                            should_yield = True
-                    
-                    if should_yield:
-                        print(f"====== Yielding Master Role to ID {src} (UUID: {other_uuid}). Resetting and Re-Joining... ======")
-                        ser.close()
-                        # Reset ID so we don't try to reuse "ID 1" as a client
-                        args.robotid = None
-                        run_auto_id(args)
-                        return
-                    else:
-                        if verbose:
-                            print(f"[*] I have higher priority (my ID: {server_id}, UUID: {my_uuid}). Ignoring imposter ID {src}.")
-                except ValueError:
-                    pass
+                
+                if should_yield:
+                    print(f"====== Yielding Master Role to ID {src} (UUID: {other_uuid}). Resetting and Re-Joining... ======")
+                    ser.close()
+                    # Ensure we don't immediately re-elect ourselves as master
+                    args.robotid = None
+                    run_auto_id(args)
+                    return
+                else:
+                    if verbose:
+                        print(f"[*] I have higher priority (my ID: {server_id}, UUID: {my_uuid}). Ignoring imposter ID {src}.")
                 continue
 
             # Auto-ID Process: Listen for JOIN requests
@@ -652,18 +682,15 @@ def run_client(args):
 
         src, ln, data, rssi, snr = r
 
-        if not (data.startswith("BCN") and len(data) >= 7):
+        b = parse_beacon(data)
+        if not b:
             continue
 
         # If we reach here, we got a valid beacon!
         # Reset our failover watchdog so we don't promote ourselves
         last_beacon_mono = time.monotonic()
 
-        try:
-            frame = int(data[3:7])
-        except:
-            continue
-
+        frame = b["frame"]
         if frame == last_frame:
             continue
         last_frame = frame
@@ -776,9 +803,10 @@ def listen_for_beacon(ser: serial.Serial, timeout_s: float, verbose: bool) -> bo
             continue
 
         src, ln, data, rssi, snr = r
-        if data.startswith("BCN") and len(data) >= 7:
+        b = parse_beacon(data)
+        if b:
             if verbose:
-                print(f"[!] Master detected! (Beacon from {src}: {data} RSSI={rssi})")
+                print(f"[!] Master detected! (Beacon from {src}: BCN{b['frame']:04d}@{b['uuid']} RSSI={rssi})")
             return True
     
     if verbose:
@@ -864,28 +892,25 @@ def run_auto_id(args):
 
         src, ln, data, rssi, snr = r
         
-        # Look for Beacon
-        if not (data.startswith("BCN") and len(data) >= 7):
+        b = parse_beacon(data)
+        if not b:
             continue
 
+        frame = b["frame"]
+        other_uuid = b["uuid"]
+        offer_uuid = b["offer_uuid"]
+        offered_id = b["offer_id"]
+
         # Check if the beacon contains an offer for our UUID!
-        # Beacon format if offering: BCNxxxx_UUID:ID
-        # e.g., BCN0012_A3F9:4
-        if "_" in data and f"{my_uuid}:" in data.split("_")[1]:
+        if offer_uuid == my_uuid:
             try:
-                offer_part = data.split("_")[1]
-                # Clean the offer part: e.g. "67A5:3+222..." -> "67A5:3"
-                if "+" in offer_part:
-                    offer_part = offer_part.split("+")[0]
-                
-                offered_id = int(offer_part.split(":")[1])
                 assigned_id = offered_id
                 if not args.quiet:
                     print(f"[!] SUCCESS! Master assigned me ID {assigned_id}. Applying configuration...")
                 break
             except Exception as e:
                 if not args.quiet:
-                    print(f"[WRN] Failed to parse ID offer: {e}")
+                    print(f"[WRN] Failed to apply ID offer: {e}")
                 pass
                
         # If we reach here, we heard a beacon but no offer for us.
@@ -895,22 +920,15 @@ def run_auto_id(args):
             join_cooldown_frames = join_cooldown_frames - 1
             continue
             
-        try:
-            frame_str = str(data)[3:7]
-            frame = int(frame_str)
-        except:
-            continue
-            
+        # We already have 'frame' from the beacon
         read_m = time.monotonic()
         beacon_rx_m = read_m - rx_delay_s
         
-        # We assume the Master expects the "JOIN" slot to be at the index of (max_robots + 1)
-        # So wait until all robots are done.
         robot_list = parse_robots(args.robots)
-        max_id = max(robot_list) if robot_list else 1
+        num_robots = len(robot_list)
         
         # The JOIN slot time:
-        join_tx_time = beacon_rx_m + args.base_delay + (max_id) * args.slot + args.tx_offset
+        join_tx_time = beacon_rx_m + args.base_delay + (num_robots) * args.slot + args.tx_offset
         
         # Wait for the Join slot
         sleep_until(join_tx_time, busy_tail_s=busy_tail_s)

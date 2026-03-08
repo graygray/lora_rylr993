@@ -10,6 +10,47 @@ from typing import Dict, List
 # Utility
 # ============================================================
 
+# ============================================================
+# Shared Utilities & Beacon Parsing
+# ============================================================
+
+def parse_beacon(data: str):
+    """
+    Parse BCNxxxx@UUID_offer+relays
+    Returns: {frame, uuid, offer_uuid, offer_id, relay_str} or None
+    """
+    if not (data.startswith("BCN") and len(data) >= 7):
+        return None
+    try:
+        res = {
+            "frame": int(data[3:7]),
+            "uuid": "",
+            "offer_uuid": None,
+            "offer_id": None,
+            "relay_str": ""
+        }
+        rem = data[7:]
+        if rem.startswith("@"):
+            # @UUID_offer+relay
+            res["uuid"] = rem[1:5]
+            rem = rem[5:]
+            
+            if rem.startswith("_"):
+                # _UUID:ID+relay
+                parts = rem[1:].split("+", 1)
+                offer_part = parts[0]
+                if ":" in offer_part:
+                    o_uuid, o_id = offer_part.split(":", 1)
+                    res["offer_uuid"] = o_uuid
+                    res["offer_id"] = int(o_id)
+                if len(parts) > 1:
+                    res["relay_str"] = parts[1]
+            elif rem.startswith("+"):
+                res["relay_str"] = rem[1:]
+        return res
+    except:
+        return None
+
 def parse_rcv(line: str):
     if not line.startswith("+RCV="):
         return None
