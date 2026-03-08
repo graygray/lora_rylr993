@@ -149,9 +149,9 @@ class Stats:
 # Auto calculations
 # ============================================================
 
-def auto_slot(frame, base, offset, robots, margin, slot_offset_stats):
+def auto_slot(frame, base, offset, robots, margin, slot_offset_stats, jitter_s=0.0018):
     vals = [slot_offset_stats[r].max_v for r in robots if math.isfinite(slot_offset_stats[r].max_v)]
-    worst_offset = max(vals) / 1000.0 if vals else 0.0
+    worst_offset = max(vals) / 1000.0 if vals else jitter_s
     
     num_robots = len(robots)
     denom = num_robots - 1
@@ -162,15 +162,15 @@ def auto_slot(frame, base, offset, robots, margin, slot_offset_stats):
         return 0
     return budget / denom
 
-def auto_frame(slot, base, offset, robots, margin, slot_offset_stats):
+def auto_frame(slot, base, offset, robots, margin, slot_offset_stats, jitter_s=0.0018):
     vals = [slot_offset_stats[r].max_v for r in robots if math.isfinite(slot_offset_stats[r].max_v)]
-    worst_offset = max(vals) / 1000.0 if vals else 0.0
+    worst_offset = max(vals) / 1000.0 if vals else jitter_s
     num_robots = len(robots)
     return base + (num_robots - 1)*slot + offset + worst_offset + margin
 
-def auto_max_robots(frame, slot, base, offset, margin, slot_offset_stats):
+def auto_max_robots(frame, slot, base, offset, margin, slot_offset_stats, jitter_s=0.0018):
     vals = [slot_offset_stats[r].max_v for r in slot_offset_stats if math.isfinite(slot_offset_stats[r].max_v)]
-    worst_offset = max(vals) / 1000.0 if vals else 0.0
+    worst_offset = max(vals) / 1000.0 if vals else jitter_s
     budget = frame - margin - base - offset - worst_offset
     if budget <= 0:
         return 1
@@ -278,6 +278,7 @@ def main():
     ap.add_argument("--warmup", type=int, default=8)
     ap.add_argument("--print-interval", type=int, default=20)
     ap.add_argument("--margin", type=float, default=0.03)
+    ap.add_argument("--assumed-jitter-ms", type=float, default=1.8, help="Expected timing jitter/error (ms)")
     ap.add_argument("--auto", action="store_true")
     ap.add_argument("--verbose-log", action="store_true")
 
@@ -363,6 +364,9 @@ def main():
             print("\n====== PER SUMMARY ======")
             total_ok = 0
             total_e = 0
+            
+            jitter_s = args.assumed_jitter_ms / 1000.0
+
             for r in robots:
                 e = per_expected[r]
                 ok = per_ok[r]
@@ -380,17 +384,17 @@ def main():
 
                 rec_slot = auto_slot(args.frame, args.base_delay,
                                      args.tx_offset, robots,
-                                     args.margin, slot_offset_stats)
+                                     args.margin, slot_offset_stats, jitter_s)
 
                 rec_frame = auto_frame(args.slot, args.base_delay,
                                        args.tx_offset, robots,
-                                       args.margin, slot_offset_stats)
+                                       args.margin, slot_offset_stats, jitter_s)
 
                 rec_max = auto_max_robots(args.frame, args.slot,
                                           args.base_delay,
                                           args.tx_offset,
                                           args.margin,
-                                          slot_offset_stats)
+                                          slot_offset_stats, jitter_s)
 
                 print("\n---- AUTO CALC ----")
                 print(f"Recommended slot <= {rec_slot*1000:.1f} ms")

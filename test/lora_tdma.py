@@ -245,13 +245,14 @@ def run_server(args):
     server_id = args.master
     
     if args.frame is None:
-        # Formula from user: min_frame = base + (N-1)*slot + tx_offset + jitter_max + guard
-        # Using jitter_max = 0.0018 (constant from image) and margin as guard (0.03)
+        # Formula: min_frame = base + (N-1)*slot + tx_offset + jitter_max + guard
+        # Using jitter_max = args.assumed_jitter_ms / 1000.0 and margin as guard
         num_robots = len(robots)
-        args.frame = args.base_delay + (num_robots - 1) * args.slot + args.tx_offset + 0.0018 + args.margin
+        jitter_s = args.assumed_jitter_ms / 1000.0
+        args.frame = args.base_delay + (num_robots - 1) * args.slot + args.tx_offset + jitter_s + args.margin
         if verbose:
             print(f"[AUTO-FRAME] Calculated frame duration: {args.frame:.4f}s for N={num_robots} robots")
-            print(f"             (base={args.base_delay} slot={args.slot} off={args.tx_offset} jitter=0.0018 guard={args.margin})")
+            print(f"             (base={args.base_delay} slot={args.slot} off={args.tx_offset} jitter={jitter_s:.4f} guard={args.margin})")
 
     port = resolve_port(args.port)
     bw_code = parse_bw_to_code(args.bw)
@@ -596,7 +597,8 @@ def run_client(args):
         if args.robots:
             robots = parse_robots(args.robots)
             num_robots = len(robots)
-            args.frame = args.base_delay + (num_robots - 1) * args.slot + args.tx_offset + 0.0018 + args.margin
+            jitter_s = args.assumed_jitter_ms / 1000.0
+            args.frame = args.base_delay + (num_robots - 1) * args.slot + args.tx_offset + jitter_s + args.margin
             if verbose:
                 print(f"[AUTO-FRAME] Calculated frame duration: {args.frame:.4f}s for N={num_robots} robots")
         else:
@@ -768,6 +770,7 @@ def parse_args():
     ap.add_argument("--warmup", type=int, default=10, help="Warmup frame ignore count (server)")
     ap.add_argument("--print-interval", type=int, default=10, help="Print summary every X frames (server)")
     ap.add_argument("--margin", type=float, default=0.03, help="Time margin for auto calculations")
+    ap.add_argument("--assumed-jitter-ms", type=float, default=1.8, help="Expected timing jitter/error (ms) for auto-frame calculation")
     ap.add_argument("--auto-calc", action="store_true", help="Auto parameter recommendations (server)")
     ap.add_argument("--verbose-log", action="store_true", help="Verbose RX debug logging (server)")
 
