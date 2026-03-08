@@ -313,6 +313,7 @@ def run_server(args):
     auto_id_registry: Dict[str, int] = {}
     pending_offer_uuid: Optional[str] = None
     pending_offer_id: Optional[int] = None
+    pending_offer_ttl: int = 0
     
     print("TDMA MASTER START")
 
@@ -352,9 +353,13 @@ def run_server(args):
         
         write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}", verbose=not args.quiet)
         
-        # Clear the offer and relay pool after sending
-        pending_offer_uuid = None
-        pending_offer_id = None
+        # Decrement TTL and clear offer if expired
+        if pending_offer_ttl > 0:
+            pending_offer_ttl -= 1
+            if pending_offer_ttl <= 0:
+                pending_offer_uuid = None
+                pending_offer_id = None
+        
         relay_pool = {}    # Clear relay pool for the new frame
 
         listen_end = start + args.frame - 0.015 # Extra margin for processing
@@ -474,10 +479,18 @@ def run_server(args):
                     if verbose:
                         print(f"[*] Allocated ID {assigned_id} to UUID {uuid_str}")
                         
-                # Queue the offer for the next beacon
+                # Queue the offer for the next 3 beacons (TTL=3)
                 pending_offer_uuid = uuid_str
                 pending_offer_id = assigned_id
+                pending_offer_ttl = 3
                 continue
+
+            if pending_offer_id is not None and src == pending_offer_id:
+                if verbose:
+                    print(f"[*] Robot {src} joined successfully. Clearing persistent offer.")
+                pending_offer_uuid = None
+                pending_offer_id = None
+                pending_offer_ttl = 0
 
             if src not in robots or src == server_id:
                 continue
