@@ -16,40 +16,57 @@ from typing import Dict, List
 
 def parse_beacon(data: str):
     """
-    Parse BCNxxxx@UUID_offer+relays
+    Parses structured beacon: BCN,frame,uuid,offer,relay...
     Returns: {frame, uuid, offer_uuid, offer_id, relay_str} or None
     """
-    if not (data.startswith("BCN") and len(data) >= 7):
+    if not data.startswith("BCN,"):
         return None
     try:
+        parts = data.split(",")
+        if len(parts) < 2:
+            return None
+            
         res = {
-            "frame": int(data[3:7]),
-            "uuid": "",
+            "frame": int(parts[1]),
+            "uuid": parts[2] if len(parts) > 2 else "",
             "offer_uuid": None,
             "offer_id": None,
             "relay_str": ""
         }
-        rem = data[7:]
-        if rem.startswith("@"):
-            # @UUID_offer+relay
-            res["uuid"] = rem[1:5]
-            rem = rem[5:]
+        
+        # Parse offer: uuid:id
+        if len(parts) > 3 and ":" in parts[3]:
+            o_parts = parts[3].split(":", 1)
+            res["offer_uuid"] = o_parts[0]
+            res["offer_id"] = int(o_parts[1])
             
-            if rem.startswith("_"):
-                # _UUID:ID+relay
-                parts = rem[1:].split("+", 1)
-                offer_part = parts[0]
-                if ":" in offer_part:
-                    o_uuid, o_id = offer_part.split(":", 1)
-                    res["offer_uuid"] = o_uuid
-                    res["offer_id"] = int(o_id)
-                if len(parts) > 1:
-                    res["relay_str"] = parts[1]
-            elif rem.startswith("+"):
-                res["relay_str"] = rem[1:]
+        # Relays: everything from index 4 onwards
+        if len(parts) > 4:
+            # We keep relay_str as a delimiter-separated string for compatibility
+            res["relay_str"] = "+".join(parts[4:])
+            
         return res
     except:
         return None
+
+def make_beacon(frame_id: int, uuid: str = "", offer_uuid: str = None, offer_id: int = None, relay_map: Dict[int, str] = None) -> str:
+    """
+    Constructs a structured beacon: BCN,frame,uuid,offer_uuid:offer_id,relay_id:data,relay_id:data...
+    """
+    offer_str = ""
+    if offer_uuid and offer_id is not None:
+        offer_str = f"{offer_uuid}:{offer_id}"
+    
+    relay_parts = []
+    if relay_map:
+        for rid in sorted(relay_map.keys()):
+            relay_parts.append(f"{rid:x}:{relay_map[rid]}")
+    
+    # Format: BCN,frame,uuid,offer,relay1,relay2...
+    parts = ["BCN", f"{frame_id:04d}", uuid or "", offer_str]
+    if relay_parts:
+        parts.extend(relay_parts)
+    return ",".join(parts)
 
 def parse_rcv(line: str):
     if not line.startswith("+RCV="):
@@ -308,7 +325,7 @@ def main():
 
         if frame_id > 9999:
             frame_id = frame_id % 10000
-        beacon = f"BCN{frame_id:04d}"
+        beacon = make_beacon(frame_id)
         write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}")
 
         listen_end = start + args.frame - 0.01
@@ -342,7 +359,8 @@ def main():
                 continue
 
             # NOTE: src is LoRa ADDRESS; use src for routing (keep your PER structure)
-            if fid == frame_id:
+            # NOTE: robots send an 8-bit frame sequence number (fid)
+            if fid == (frame_id % 256):
                 received.add(src)
                 if frame_id > args.warmup:
                     per_ok[src] += 1
@@ -353,7 +371,7 @@ def main():
                 if frame_id > args.warmup:
                     per_mismatch[src] += 1
                 if args.verbose_log:
-                    print(f"[RX MISMATCH] expect={frame_id} got={fid} from={src} "
+                    print(f"[RX MISMATCH] expect={frame_id % 256} got={fid} from={src} "
                           f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms")
 
         if frame_id > args.warmup:

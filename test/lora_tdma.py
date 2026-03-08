@@ -90,39 +90,58 @@ def drain_uart(ser: serial.Serial, seconds: float, verbose: bool):
 # Shared Utilities & Beacon Parsing
 # ============================================================
 
+def make_beacon(frame_id: int, uuid: str, offer_uuid: Optional[str] = None, offer_id: Optional[int] = None, relay_map: Optional[Dict[int, str]] = None) -> str:
+    """
+    Constructs a structured beacon: BCN,frame,uuid,offer_uuid:offer_id,relay_id:data,relay_id:data...
+    """
+    offer_str = ""
+    if offer_uuid and offer_id is not None:
+        offer_str = f"{offer_uuid}:{offer_id}"
+    
+    relay_parts = []
+    if relay_map:
+        for rid in sorted(relay_map.keys()):
+            relay_parts.append(f"{rid:x}:{relay_map[rid]}")
+    
+    # Format: BCN,frame,uuid,offer,relay1,relay2...
+    parts = ["BCN", f"{frame_id:04d}", uuid or "", offer_str]
+    if relay_parts:
+        parts.extend(relay_parts)
+    return ",".join(parts)
+
 def parse_beacon(data: str):
     """
-    Parse BCNxxxx@UUID_offer+relays
+    Parses structured beacon: BCN,frame,uuid,offer,relay...
     Returns: {frame, uuid, offer_uuid, offer_id, relay_str} or None
     """
-    if not (data.startswith("BCN") and len(data) >= 7):
+    if not data.startswith("BCN,"):
         return None
     try:
+        parts = data.split(",")
+        if len(parts) < 2:
+            return None
+            
         res = {
-            "frame": int(data[3:7]),
-            "uuid": "",
+            "frame": int(parts[1]),
+            "uuid": parts[2] if len(parts) > 2 else "",
             "offer_uuid": None,
             "offer_id": None,
             "relay_str": ""
         }
-        rem = data[7:]
-        if rem.startswith("@"):
-            # @UUID_offer+relay
-            res["uuid"] = rem[1:5]
-            rem = rem[5:]
+        
+        # Parse offer: uuid:id
+        if len(parts) > 3 and ":" in parts[3]:
+            o_parts = parts[3].split(":", 1)
+            res["offer_uuid"] = o_parts[0]
+            res["offer_id"] = int(o_parts[1])
             
-            if rem.startswith("_"):
-                # _UUID:ID+relay
-                parts = rem[1:].split("+", 1)
-                offer_part = parts[0]
-                if ":" in offer_part:
-                    o_uuid, o_id = offer_part.split(":", 1)
-                    res["offer_uuid"] = o_uuid
-                    res["offer_id"] = int(o_id)
-                if len(parts) > 1:
-                    res["relay_str"] = parts[1]
-            elif rem.startswith("+"):
-                res["relay_str"] = rem[1:]
+        # Relays: everything from index 4 onwards
+        if len(parts) > 4:
+            # We keep relay_str as a delimiter-separated string for compatibility
+            # but we use '+' internally if the external protocol uses ','
+            # Actually, let's just join them with '+' so existing relay logic (if any) works
+            res["relay_str"] = "+".join(parts[4:])
+            
         return res
     except:
         return None
@@ -282,7 +301,8 @@ def run_server(args):
     
     # Auto-ID Registry (UUID string -> assigned Robot ID integer)
     auto_id_registry: Dict[str, int] = {}
-    pending_offer: str = "" # e.g., "_A3F9:5"
+    pending_offer_uuid: Optional[str] = None
+    pending_offer_id: Optional[int] = None
     
     print("TDMA MASTER START")
 
@@ -308,24 +328,30 @@ def run_server(args):
         next_frame_start = start + args.frame - jitter_break
         
         frame_id += 1
-        
-        # Build aggregated data string: +2data+3data (stripping robot sequence)
-        relay_str = ""
-        for rid in sorted(relay_pool.keys()):
-            relay_str += f"+{rid:1x}{relay_pool[rid]}"
-        
         if frame_id > 9999:
             frame_id = frame_id % 10000
-        beacon = f"BCN{frame_id:04d}@{my_uuid}{pending_offer}{relay_str}"
+            
+        beacon = make_beacon(
+            frame_id=frame_id,
+            uuid=my_uuid,
+            offer_uuid=pending_offer_uuid,
+            offer_id=pending_offer_id,
+            relay_map=relay_pool
+        )
         
         # LoRa RYLR993 / AT+SEND typically has a 242-byte limit
         if len(beacon) > 242:
             if not args.quiet:
                 print(f"[WRN] Beacon length ({len(beacon)}) exceeds 242 limit! Truncating aggregated data.")
+            # We don't want to just slice a comma-separated string blindly if we can help it,
+            # but for now we follow the existing truncation logic.
             beacon = beacon[:242]
 
         write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}", verbose=not args.quiet)
-        pending_offer = "" # Clear the offer after sending it once
+        
+        # Clear the offer and relay pool after sending
+        pending_offer_uuid = None
+        pending_offer_id = None
         relay_pool = {}    # Clear relay pool for the new frame
 
         listen_end = start + args.frame - 0.015 # Extra margin for processing
@@ -373,6 +399,11 @@ def run_server(args):
                 else:
                     if verbose:
                         print(f"[*] I have higher priority (my ID: {server_id}, UUID: {my_uuid}). Ignoring imposter ID {src}.")
+                    # Even if we don't yield, we can aggregate their relay data or offers if frame matches
+                    if other_frame == frame_id:
+                        if b["offer_uuid"] and b["offer_id"] is not None:
+                            pending_offer_uuid = b["offer_uuid"]
+                            pending_offer_id = b["offer_id"]
                 continue
 
             # Auto-ID Process: Listen for JOIN requests
@@ -441,7 +472,8 @@ def run_server(args):
                         print(f"[*] Allocated ID {assigned_id} to UUID {uuid_str}")
                         
                 # Queue the offer for the next beacon
-                pending_offer = f"_{uuid_str}:{assigned_id}"
+                pending_offer_uuid = uuid_str
+                pending_offer_id = assigned_id
                 continue
 
             if src not in robots or src == server_id:
