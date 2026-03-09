@@ -825,7 +825,7 @@ def parse_args():
     # ap.add_argument("--base-delay", type=float, default=0.25)
     # ap.add_argument("--tx-offset", type=float, default=0.02)
     ap.add_argument("--slot", type=float, default=0.08)
-    ap.add_argument("--base-delay", type=float, default=0.2)
+    ap.add_argument("--base-delay", type=float, default=0.25)
     ap.add_argument("--tx-offset", type=float, default=0.016)
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
 
