@@ -308,7 +308,8 @@ def run_server(args):
 
     slot_offset_stats: Dict[int, Stats] = {r: Stats() for r in robots}
     beacon_to_rx_stats: Dict[int, Stats] = {r: Stats() for r in robots}
-    last_heard_mono: Dict[int, float] = {r: time.monotonic() for r in robots}
+    # 0 means "never heard yet" to avoid falsely reserving all IDs at startup.
+    last_heard_mono: Dict[int, float] = {r: 0.0 for r in robots}
     joined_at_frame: Dict[int, int] = {r: -1 for r in robots}
 
     frame_id = 0
@@ -461,7 +462,8 @@ def run_server(args):
                     # Also consider IDs used if we've heard traffic from them recently
                     # (This handles robots that were already running if the Master restarts)
                     for r_id in robots:
-                        if time.monotonic() - last_heard_mono.get(r_id, 0) <= 30:
+                        # Reserve IDs only for robots we have actually observed.
+                        if joined_at_frame.get(r_id, -1) != -1 and time.monotonic() - last_heard_mono.get(r_id, 0) <= 30:
                             used_ids.add(r_id)
 
                     for r_id in robots:
