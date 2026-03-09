@@ -850,13 +850,8 @@ def run_client(args):
 
             args.master = 1
 
-            if args.robots:
-                r_list = parse_robots(args.robots)
-                if args.robotid in r_list:
-                    r_list.remove(args.robotid)
-                args.robots = ",".join(map(str, r_list))
-                if verbose:
-                    print(f"[*] New robot list for server: {args.robots}")
+            if verbose and args.robots:
+                print(f"[*] Keep robot pool for server: {args.robots}")
 
             run_server(args)
             return
