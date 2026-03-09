@@ -6,7 +6,7 @@ import math
 import sys
 from dataclasses import dataclass
 import random
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 # ============================================================
 # Shared Utility
@@ -86,82 +86,199 @@ def drain_uart(ser: serial.Serial, seconds: float, verbose: bool):
         if l and verbose:
             print("[DRAIN]", l)
 
+def sleep_until(deadline_mono: float, busy_tail_s: float = 0.002):
+    while True:
+        now = time.monotonic()
+        remain = deadline_mono - now
+        if remain <= 0:
+            return
+        if remain > busy_tail_s:
+            time.sleep(remain - busy_tail_s)
+        else:
+            pass
+
 # ============================================================
-# Shared Utilities & Beacon Parsing
+# Local Pose / Peer Table
 # ============================================================
 
-def make_beacon(frame_id: int, uuid: str, offer_uuid: Optional[str] = None, offer_id: Optional[int] = None, relay_map: Optional[Dict[int, str]] = None, max_len: int = 242) -> str:
+def get_local_pose(args) -> Dict[str, int]:
     """
-    Constructs a structured beacon: BCN,frame,uuid,offer_uuid:offer_id,relay_id:data,relay_id:data...
-    Iteratively adds relay items while within max_len.
+    Minimal version:
+    use CLI args as the local pose source.
+    Later you can replace this with real localization data.
+    """
+    return {
+        "x": int(args.x),
+        "y": int(args.y),
+        "heading": int(args.heading),
+        "status": int(args.status),
+    }
+
+def update_peer_table(
+    peer_table: Dict[int, Dict[str, Any]],
+    peer_id: int,
+    *,
+    role: str,
+    x: int,
+    y: int,
+    heading: int,
+    status: int,
+    seq: int,
+    rssi: int,
+    snr: int,
+    src_addr: int,
+):
+    peer_table[peer_id] = {
+        "role": role,
+        "x": x,
+        "y": y,
+        "heading": heading,
+        "status": status,
+        "seq": seq,
+        "last_update_mono": time.monotonic(),
+        "rssi": rssi,
+        "snr": snr,
+        "src_addr": src_addr,
+    }
+
+def print_peer_table(peer_table: Dict[int, Dict[str, Any]], stale_timeout_s: float):
+    print("---- PEER TABLE ----")
+    if not peer_table:
+        print("(empty)")
+        print("--------------------")
+        return
+
+    now = time.monotonic()
+    for peer_id in sorted(peer_table.keys()):
+        p = peer_table[peer_id]
+        age = now - p["last_update_mono"]
+        stale = "STALE" if age > stale_timeout_s else "OK"
+        print(
+            f"ID {peer_id:>3} [{p['role']:^6}] "
+            f"x={p['x']} y={p['y']} hdg={p['heading']} st={p['status']} "
+            f"seq={p['seq']:02X} RSSI={p['rssi']} SNR={p['snr']} age={age:.1f}s {stale}"
+        )
+    print("--------------------")
+
+# ============================================================
+# Shared Packet Format
+# ============================================================
+
+def make_master_pos_field(master_id: int, seq: int, x: int, y: int, heading: int, status: int) -> str:
+    return f"P:{master_id}:{seq:02X}:{x}:{y}:{heading}:{status}"
+
+def parse_master_pos_field(field: str):
+    """
+    P:<id>:<seq_hex>:<x>:<y>:<heading>:<status>
+    """
+    if not field.startswith("P:"):
+        return None
+    try:
+        parts = field.split(":")
+        if len(parts) != 7:
+            return None
+        return {
+            "id": int(parts[1]),
+            "seq": int(parts[2], 16),
+            "x": int(parts[3]),
+            "y": int(parts[4]),
+            "heading": int(parts[5]),
+            "status": int(parts[6]),
+        }
+    except:
+        return None
+
+def make_beacon(
+    frame_id: int,
+    uuid: str,
+    master_id: int,
+    master_x: int,
+    master_y: int,
+    master_heading: int,
+    master_status: int,
+    offer_uuid: Optional[str] = None,
+    offer_id: Optional[int] = None,
+) -> str:
+    """
+    Beacon format:
+    BCN,<frame>,<uuid>,<offer>,P:<master_id>:<seq>:<x>:<y>:<heading>:<status>
     """
     offer_str = ""
     if offer_uuid and offer_id is not None:
         offer_str = f"{offer_uuid}:{offer_id}"
-    
-    parts = ["BCN", f"{frame_id:04d}", uuid or "", offer_str]
-    
-    # Calculate base length with commas
-    # join(",") adds len(parts)-1 commas
-    current_beacon = ",".join(parts)
-    
-    if relay_map:
-        for rid in sorted(relay_map.keys()):
-            item = f"{rid:x}:{relay_map[rid]}"
-            # Potential new beacon: existing + comma + item
-            potential_len = len(current_beacon) + 1 + len(item)
-            if potential_len <= max_len:
-                parts.append(item)
-                current_beacon = ",".join(parts)
-            else:
-                # MTU Reached
-                break
-                
-    return current_beacon
+
+    master_pos = make_master_pos_field(
+        master_id=master_id,
+        seq=(frame_id % 256),
+        x=master_x,
+        y=master_y,
+        heading=master_heading,
+        status=master_status,
+    )
+    return f"BCN,{frame_id:04d},{uuid or ''},{offer_str},{master_pos}"
 
 def parse_beacon(data: str):
     """
-    Parses structured beacon: BCN,frame,uuid,offer,relay...
-    Returns: {frame, uuid, offer_uuid, offer_id, relay_str} or None
+    Beacon format:
+    BCN,<frame>,<uuid>,<offer>,P:<master_id>:<seq>:<x>:<y>:<heading>:<status>
     """
     if not data.startswith("BCN,"):
         return None
     try:
         parts = data.split(",")
-        if len(parts) < 2:
+        if len(parts) < 5:
             return None
-            
+
         res = {
             "frame": int(parts[1]),
-            "uuid": parts[2] if len(parts) > 2 else "",
+            "uuid": parts[2],
             "offer_uuid": None,
             "offer_id": None,
-            "relay_str": ""
+            "master_pos": None,
         }
-        
-        # Strictly treat parts[3] as offer field if it exists
-        if len(parts) > 3:
-            offer_field = parts[3]
-            if offer_field and ":" in offer_field:
-                try:
-                    o_parts = offer_field.split(":", 1)
-                    if len(o_parts) == 2:
-                        res["offer_uuid"] = o_parts[0]
-                        res["offer_id"] = int(o_parts[1])
-                except (ValueError, IndexError):
-                    # Malformed offer shouldn't kill the whole beacon
-                    pass
-            
-        # Relays: strictly from index 4 onwards
-        if len(parts) > 4:
-            res["relay_str"] = "+".join(parts[4:])
-            
+
+        offer_field = parts[3]
+        if offer_field and ":" in offer_field:
+            try:
+                o_parts = offer_field.split(":", 1)
+                if len(o_parts) == 2:
+                    res["offer_uuid"] = o_parts[0]
+                    res["offer_id"] = int(o_parts[1])
+            except (ValueError, IndexError):
+                pass
+
+        res["master_pos"] = parse_master_pos_field(parts[4])
         return res
     except (ValueError, IndexError):
         return None
 
+def make_pos_payload(robot_id: int, seq: int, x: int, y: int, heading: int, status: int) -> str:
+    """
+    Robot broadcast position packet:
+    POS,<id>,<seq_hex>,<x>,<y>,<heading>,<status>
+    """
+    return f"POS,{robot_id},{seq:02X},{x},{y},{heading},{status}"
+
+def parse_pos_payload(data: str):
+    if not data.startswith("POS,"):
+        return None
+    try:
+        parts = data.split(",")
+        if len(parts) != 7:
+            return None
+        return {
+            "id": int(parts[1]),
+            "seq": int(parts[2], 16),
+            "x": int(parts[3]),
+            "y": int(parts[4]),
+            "heading": int(parts[5]),
+            "status": int(parts[6]),
+        }
+    except:
+        return None
+
 # ============================================================
-# Master Utilities & Logic
+# Stats / Radio Helpers
 # ============================================================
 
 @dataclass
@@ -187,21 +304,10 @@ class Stats:
             return "n=0"
         return f"n={self.n} min={self.min_v:.1f}ms avg={self.avg():.1f}ms max={self.max_v:.1f}ms"
 
-def parse_payload_hex(data_hex: str):
-    if not data_hex or len(data_hex) < 2:
-        return None
-    try:
-        # Format: 2 hex char Seq (00-FF)
-        fid = int(data_hex[0:2], 16)
-        data_part = data_hex[2:]
-        return fid, data_part
-    except:
-        return None
-
 def auto_slot(frame, base, offset, robots, margin, slot_offset_stats):
     vals = [slot_offset_stats[r].max_v for r in robots if math.isfinite(slot_offset_stats[r].max_v)]
     worst_offset = max(vals) / 1000.0 if vals else 0.0
-    
+
     denom = len(robots) - 1
     if denom <= 0:
         return 0
@@ -214,7 +320,7 @@ def auto_frame(slot, base, offset, robots, margin, slot_offset_stats):
     vals = [slot_offset_stats[r].max_v for r in robots if math.isfinite(slot_offset_stats[r].max_v)]
     worst_offset = max(vals) / 1000.0 if vals else 0.0
     num_robots = len(robots)
-    return base + (num_robots - 1)*slot + offset + worst_offset + margin
+    return base + (num_robots - 1) * slot + offset + worst_offset + margin
 
 def auto_max_robots(frame, slot, base, offset, margin, slot_offset_stats):
     vals = [slot_offset_stats[r].max_v for r in slot_offset_stats if math.isfinite(slot_offset_stats[r].max_v)]
@@ -272,14 +378,39 @@ def init_radio(ser: serial.Serial, my_id: int, args):
 def init_radio_master(ser, args):
     init_radio(ser, args.master, args)
 
+def init_radio_robot(ser, args):
+    init_radio(ser, args.robotid, args)
+
+# ============================================================
+# Common RX Parser
+# ============================================================
+
+def parse_rcv(line: str) -> Optional[Tuple[int, int, str, int, int]]:
+    if not line.startswith("+RCV="):
+        return None
+    try:
+        p = line[5:].split(",")
+        if len(p) < 5:
+            return None
+        src = int(p[0])
+        ln = int(p[1])
+        data = ",".join(p[2:-2])
+        rssi = int(p[-2])
+        snr = int(p[-1])
+        return src, ln, data, rssi, snr
+    except:
+        return None
+
+# ============================================================
+# Master Logic
+# ============================================================
+
 def run_server(args):
     verbose = not args.quiet
     robots = parse_robots(args.robots)
     server_id = args.master
-    
+
     if args.frame is None:
-        # Formula: min_frame = base + (N-1)*slot + tx_offset + jitter_max + guard
-        # Using jitter_max = args.assumed_jitter_ms / 1000.0 and margin as guard
         num_robots = len(robots)
         jitter_s = args.assumed_jitter_ms / 1000.0
         args.frame = args.base_delay + (num_robots - 1) * args.slot + args.tx_offset + jitter_s + args.margin
@@ -291,87 +422,93 @@ def run_server(args):
     bw_code = parse_bw_to_code(args.bw)
 
     if verbose:
-        print(f"[CFG] PORT={port} BAUD={args.baud} MASTER={args.master} "
-              f"sf={args.sf} bw_code={bw_code} cr={args.cr} pre={args.preamble} "
-              f"slot={args.slot:.3f}s base={args.base_delay:.3f}s off={args.tx_offset:.3f}s "
-              f"frame={args.frame:.4f}s robots={args.robots}")
+        print(
+            f"[CFG] PORT={port} BAUD={args.baud} MASTER={args.master} "
+            f"sf={args.sf} bw_code={bw_code} cr={args.cr} pre={args.preamble} "
+            f"slot={args.slot:.3f}s base={args.base_delay:.3f}s off={args.tx_offset:.3f}s "
+            f"frame={args.frame:.4f}s robots={args.robots}"
+        )
 
     ser = serial.Serial(port, args.baud, timeout=0.1)
-
     init_radio_master(ser, args)
 
     per_expected: Dict[int, int] = {r: 0 for r in robots}
     per_ok: Dict[int, int] = {r: 0 for r in robots}
     per_mismatch: Dict[int, int] = {r: 0 for r in robots}
-    
-    robot_order = {rid: i for i, rid in enumerate(sorted(robots))}
 
+    robot_order = {rid: i for i, rid in enumerate(sorted(robots))}
     slot_offset_stats: Dict[int, Stats] = {r: Stats() for r in robots}
     beacon_to_rx_stats: Dict[int, Stats] = {r: Stats() for r in robots}
-    # 0 means "never heard yet" to avoid falsely reserving all IDs at startup.
     last_heard_mono: Dict[int, float] = {r: 0.0 for r in robots}
     joined_at_frame: Dict[int, int] = {r: -1 for r in robots}
 
-    frame_id = 0
-    
-    # Auto-ID Registry (UUID string -> assigned Robot ID integer)
     auto_id_registry: Dict[str, int] = {}
     pending_offer_uuid: Optional[str] = None
     pending_offer_id: Optional[int] = None
     pending_offer_ttl: int = 0
-    
-    print("TDMA MASTER START")
 
-    # Ensure we use the same UUID allocated during Auto-ID/Main
-    my_uuid = getattr(args, 'my_uuid', None)
+    my_uuid = getattr(args, "my_uuid", None)
     if my_uuid is None:
         my_uuid = f"{random.randint(0, 0xFFFF):04X}"
-        setattr(args, 'my_uuid', my_uuid)
-    
-    # Aggregated relay data from robots (ID -> Payload Data)
-    relay_pool: Dict[int, str] = {}
-    
-    # Stable frame timing logic
+        setattr(args, "my_uuid", my_uuid)
+
+    peer_table: Dict[int, Dict[str, Any]] = {}
+
+    frame_id = 0
     next_frame_start = time.monotonic()
-    
+
+    print("TDMA MASTER START")
+
     while True:
-        # Increase jitter (0-150ms) to break phase-lock in dual-master collisions
-        jitter_break = random.uniform(0, 0.150)
+        # Minimal stable version: keep jitter_break disabled by default
+        jitter_break = 0.0
         start = next_frame_start + jitter_break
         sleep_until(start, busy_tail_s=0.002)
-        
-        # Calculate next expected frame start for stability
         next_frame_start = start + args.frame - jitter_break
-        
+
         frame_id += 1
         if frame_id > 9999:
             frame_id = 1
-            
+
+        pose = get_local_pose(args)
         beacon = make_beacon(
             frame_id=frame_id,
             uuid=my_uuid,
+            master_id=server_id,
+            master_x=pose["x"],
+            master_y=pose["y"],
+            master_heading=pose["heading"],
+            master_status=pose["status"],
             offer_uuid=pending_offer_uuid,
             offer_id=pending_offer_id,
-            relay_map=relay_pool,
-            max_len=242
         )
-        
+
         write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}", verbose=not args.quiet)
-        
-        # Decrement TTL and clear offer if expired
+
+        # Update peer table for master itself
+        update_peer_table(
+            peer_table,
+            server_id,
+            role="master",
+            x=pose["x"],
+            y=pose["y"],
+            heading=pose["heading"],
+            status=pose["status"],
+            seq=(frame_id % 256),
+            rssi=0,
+            snr=0,
+            src_addr=server_id,
+        )
+
         if pending_offer_ttl > 0:
             pending_offer_ttl -= 1
             if pending_offer_ttl <= 0:
                 pending_offer_uuid = None
                 pending_offer_id = None
-        
-        relay_pool = {}    # Clear relay pool for the new frame
 
-        listen_end = start + args.frame - 0.015 # Extra margin for processing
-        received = set()
+        listen_end = start + args.frame - 0.015
 
         while time.monotonic() < listen_end:
-            # Use non-blocking check to avoid 100ms timeout lag
             if ser.in_waiting == 0:
                 time.sleep(0.001)
                 continue
@@ -380,89 +517,67 @@ def run_server(args):
             r = parse_rcv(line)
             if not r:
                 continue
-            
+
             src, ln, data, rssi, snr = r
 
-            # Dual-server conflict resolution
+            # Other master's beacon
             b = parse_beacon(data)
             if b:
                 other_frame = b["frame"]
                 other_uuid = b["uuid"]
-                
+
                 if verbose:
                     print(f"[!] WARNING: Heard BCN{other_frame:04d}@{other_uuid} from ID {src}! Dual-server conflict detected.")
-                
-                # Tie-breaker logic:
-                # 1. Lower ID wins.
-                # 2. If IDs same, lower UUID wins.
+
                 should_yield = False
                 if src < server_id:
                     should_yield = True
                 elif src == server_id:
                     if other_uuid and other_uuid < my_uuid:
                         should_yield = True
-                
+
                 if should_yield:
                     print(f"====== Yielding Master Role to ID {src} (UUID: {other_uuid}). Resetting and Re-Joining... ======")
                     ser.close()
-                    # Ensure we don't immediately re-elect ourselves as master
                     args.robotid = None
                     run_auto_id(args)
                     return
                 else:
                     if verbose:
                         print(f"[*] I have higher priority (my ID: {server_id}, UUID: {my_uuid}). Ignoring imposter ID {src}.")
-                    # Even if we don't yield, we can aggregate their relay data or offers if frame matches
-                    if other_frame == frame_id:
-                        if b["offer_uuid"] and b["offer_id"] is not None:
-                            pending_offer_uuid = b["offer_uuid"]
-                            pending_offer_id = b["offer_id"]
                 continue
 
-            # Auto-ID Process: Listen for JOIN requests
-            # JOIN payloads look like: JOIN:A3F9
-            # The length is typically 9 chars: JOIN (4) + : (1) + UUID (4)
+            # JOIN request
             if isinstance(data, str) and data.startswith("JOIN:") and len(data) >= 9:
                 uuid_str = str(data[5:9])
                 if verbose:
                     print(f"[*] Heard JOIN request from UUID: {uuid_str}")
-                
-                # Check if already assigned
+
                 if uuid_str in auto_id_registry:
                     assigned_id = auto_id_registry[uuid_str]
                 else:
-                    # Cleanup dead leases: If an ID hasn't been heard from in >15 frames, release it!
-                    # We need a list to avoid modifying dict while iterating
                     dead_uuids = []
                     for reg_uuid, reg_id in auto_id_registry.items():
                         if time.monotonic() - last_heard_mono.get(reg_id, 0) > 30:
                             dead_uuids.append(reg_uuid)
-                    
+
                     for dead in dead_uuids:
                         freed_id = auto_id_registry.pop(dead)
                         if verbose:
                             print(f"[*] Reclaiming inactive ID {freed_id} from UUID {dead} (Silent for >30s)")
-                        # Reset stats for the reclaimed ID
                         per_expected[freed_id] = 0
                         per_ok[freed_id] = 0
                         per_mismatch[freed_id] = 0
                         slot_offset_stats[freed_id] = Stats()
                         beacon_to_rx_stats[freed_id] = Stats()
                         joined_at_frame[freed_id] = -1
-                        last_heard_mono[freed_id] = 0
+                        last_heard_mono[freed_id] = 0.0
 
-                    # Find lowest available ID from args.robots
-                    # Example: if robots=[1,2,3,4,5], we need to find one that is NOT in registry
-                    # but wait, robots list defines total capacity. 
-                    # Let's say all IDs in robots list (except master) are available pool.
                     assigned_id = None
                     used_ids = set(auto_id_registry.values())
-                    used_ids.add(args.master) # Server takes its own ID
-                    
-                    # Also consider IDs used if we've heard traffic from them recently
-                    # (This handles robots that were already running if the Master restarts)
+                    used_ids.add(args.master)
+
                     for r_id in robots:
-                        # Reserve IDs only for robots we have actually observed.
                         if joined_at_frame.get(r_id, -1) != -1 and time.monotonic() - last_heard_mono.get(r_id, 0) <= 30:
                             used_ids.add(r_id)
 
@@ -470,22 +585,19 @@ def run_server(args):
                         if r_id not in used_ids:
                             assigned_id = r_id
                             break
-                    
+
                     if assigned_id is None:
                         if verbose:
                             print("[!] ERROR: Request received but no available IDs in pool!")
                         continue
-                        
+
                     auto_id_registry[uuid_str] = assigned_id
-                    
-                    # IMPORTANT: Initialize the lease timer so we don't immediately revoke it
                     last_heard_mono[assigned_id] = time.monotonic()
                     joined_at_frame[assigned_id] = frame_id
-                    
+
                     if verbose:
                         print(f"[*] Allocated ID {assigned_id} to UUID {uuid_str}")
-                        
-                # Queue the offer for the next 3 beacons (TTL=3)
+
                 pending_offer_uuid = uuid_str
                 pending_offer_id = assigned_id
                 pending_offer_ttl = 3
@@ -501,50 +613,65 @@ def run_server(args):
             if src not in robots or src == server_id:
                 continue
 
+            pos = parse_pos_payload(data)
+            if not pos:
+                if args.verbose_log:
+                    print(f"[RX BAD] frame={frame_id} from={src} raw={data[:64]}...")
+                continue
+
+            # Use LoRa src address as truth
+            if pos["id"] != src:
+                if args.verbose_log:
+                    print(f"[RX BAD-ID] src={src} payload_id={pos['id']} raw={data}")
+                continue
+
             slot_index = robot_order[src]
             t = now_ms(start)
             expected = (args.base_delay + slot_index * args.slot + args.tx_offset) * 1000.0
             slot_offset = t - expected
 
-            pp = parse_payload_hex(data)
-            if not pp:
-                if args.verbose_log:
-                    print(f"[RX BAD] frame={frame_id} from={src} "
-                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms raw={data[:16]}...")
-                continue
-
-            fid, dpart = pp
-            
-            # If we successfully parsed a payload from them, update their lease!
             last_heard_mono[src] = time.monotonic()
             if joined_at_frame[src] == -1:
                 joined_at_frame[src] = frame_id
-            
-            # Store data for next beacon relay
-            relay_pool[src] = dpart
-            
-            # 8-bit sequence number rollover sync
-            if fid == (frame_id % 256):
-                received.add(src)
+
+            update_peer_table(
+                peer_table,
+                src,
+                role="robot",
+                x=pos["x"],
+                y=pos["y"],
+                heading=pos["heading"],
+                status=pos["status"],
+                seq=pos["seq"],
+                rssi=rssi,
+                snr=snr,
+                src_addr=src,
+            )
+
+            if pos["seq"] == (frame_id % 256):
                 slot_offset_stats[src].add(slot_offset)
                 beacon_to_rx_stats[src].add(t)
-                if joined_at_frame[src] != -1 and frame_id > joined_at_frame[src] + args.warmup:
+                if frame_id > joined_at_frame[src] + args.warmup:
                     per_ok[src] += 1
                 if args.verbose_log:
-                    print(f"[RX OK] frame={frame_id} from={src} "
-                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms")
+                    print(
+                        f"[RX OK] frame={frame_id} from={src} "
+                        f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms "
+                        f"pos=({pos['x']},{pos['y']}) hdg={pos['heading']} st={pos['status']}"
+                    )
             else:
-                if joined_at_frame[src] != -1 and frame_id > joined_at_frame[src] + args.warmup:
+                if frame_id > joined_at_frame[src] + args.warmup:
                     per_mismatch[src] += 1
                 if args.verbose_log:
-                    print(f"[RX MISMATCH] expect={frame_id % 256} got={fid} from={src} "
-                          f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms")
+                    print(
+                        f"[RX MISMATCH] expect={frame_id % 256} got={pos['seq']} from={src} "
+                        f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms"
+                    )
 
         for r in robots:
             if r != server_id and joined_at_frame[r] != -1:
-                # Per-robot warmup: start counting expected after joined_at_frame + warmup
                 if frame_id > joined_at_frame[r] + args.warmup:
-                    per_expected[r] = per_expected.get(r, 0) + 1
+                    per_expected[r] += 1
 
         if frame_id % args.print_interval == 0:
             print("\n====== PER SUMMARY ======")
@@ -555,19 +682,20 @@ def run_server(args):
                     continue
                 e = per_expected[r]
                 ok = per_ok[r]
-                per = (e-ok)/e if e else 0
+                per = (e - ok) / e if e else 0
                 print(f"Robot {r}: OK={ok}/{e} PER={per*100:.3f}% mismatch={per_mismatch[r]}")
                 print("  BEACON_TO_RX:", beacon_to_rx_stats[r].fmt())
                 print("  SLOT_OFFSET :", slot_offset_stats[r].fmt())
                 total_ok += ok
                 total_e += e
 
-            gper = 1 - total_ok/total_e if total_e else 0
+            gper = 1 - total_ok / total_e if total_e else 0
             print(f"GLOBAL PER = {gper*100:.3f}%")
 
-            if args.auto_calc:
-                rec_slot = auto_slot(args.frame, args.base_delay, args.tx_offset, robots, args.margin, slot_offset_stats)
-                rec_frame = auto_frame(args.slot, args.base_delay, args.tx_offset, robots, args.margin, slot_offset_stats)
+            active_robots = [r for r in robots if joined_at_frame[r] != -1 and r != server_id]
+            if args.auto_calc and active_robots:
+                rec_slot = auto_slot(args.frame, args.base_delay, args.tx_offset, active_robots, args.margin, slot_offset_stats)
+                rec_frame = auto_frame(args.slot, args.base_delay, args.tx_offset, active_robots, args.margin, slot_offset_stats)
                 rec_max = auto_max_robots(args.frame, args.slot, args.base_delay, args.tx_offset, args.margin, slot_offset_stats)
 
                 print("\n---- AUTO CALC ----")
@@ -575,84 +703,58 @@ def run_server(args):
                 print(f"Minimum frame needed ≈ {rec_frame*1000:.1f} ms")
                 print(f"Max robots supportable ≈ {rec_max}")
 
-                bw_hz = 500000 if str(args.bw) in ("9", "500", "500k", "500000") else \
-                        250000 if str(args.bw) in ("8", "250", "250k", "250000") else \
-                        125000
-
-                airtime_s = lora_airtime_seconds(
-                    sf=args.sf, bw_hz=bw_hz, cr=args.cr, preamble=args.preamble, payload_bytes=args.payload_bytes
+                pose_for_len = get_local_pose(args)
+                pos_payload_len = len(
+                    make_pos_payload(
+                        robot_id=server_id,
+                        seq=0,
+                        x=pose_for_len["x"],
+                        y=pose_for_len["y"],
+                        heading=pose_for_len["heading"],
+                        status=pose_for_len["status"],
+                    )
                 )
 
-                offset_span_s = 0.0
-                # Using overall offset range since auto minimum
+                bw_hz = (
+                    500000 if str(args.bw) in ("9", "500", "500k", "500000")
+                    else 250000 if str(args.bw) in ("8", "250", "250k", "250000")
+                    else 125000
+                )
+
+                airtime_s = lora_airtime_seconds(
+                    sf=args.sf,
+                    bw_hz=bw_hz,
+                    cr=args.cr,
+                    preamble=args.preamble,
+                    payload_bytes=pos_payload_len,
+                )
+
                 offset_min_s = float("inf")
                 offset_max_s = float("-inf")
-                for r in robots:
+                for r in active_robots:
                     if slot_offset_stats[r].n > 0:
-                        if slot_offset_stats[r].min_v < offset_min_s: offset_min_s = slot_offset_stats[r].min_v
-                        if slot_offset_stats[r].max_v > offset_max_s: offset_max_s = slot_offset_stats[r].max_v
-                try:
-                    if math.isfinite(offset_max_s) and math.isfinite(offset_min_s):
-                        offset_span_s = max(0.0, (offset_max_s - offset_min_s)/1000.0)
-                except:
-                    offset_span_s = 0.0
+                        offset_min_s = min(offset_min_s, slot_offset_stats[r].min_v)
+                        offset_max_s = max(offset_max_s, slot_offset_stats[r].max_v)
+
+                offset_span_s = 0.0
+                if math.isfinite(offset_max_s) and math.isfinite(offset_min_s):
+                    offset_span_s = max(0.0, (offset_max_s - offset_min_s) / 1000.0)
 
                 guard_s = 0.010
                 min_slot_s = airtime_s + offset_span_s + guard_s
-
                 print(f"Minimum slot needed ≥ {min_slot_s*1000:.1f} ms")
                 print("-------------------")
+
+            print_peer_table(peer_table, args.peer_timeout_s)
             print("========================\n")
 
-
 # ============================================================
-# Robot Utilities & Logic
+# Client Logic
 # ============================================================
-
-def parse_rcv(line: str) -> Optional[Tuple[int, int, str, int, int]]:
-    if not line.startswith("+RCV="):
-        return None
-    try:
-        p = line[5:].split(",")
-        if len(p) < 5:
-            return None
-        src = int(p[0])
-        ln = int(p[1])
-        # Data is everything between source/length and RSSI/SNR
-        data = ",".join(p[2:-2])
-        rssi = int(p[-2])
-        snr = int(p[-1])
-        return src, ln, data, rssi, snr
-    except:
-        return None
-
-def make_payload_ascii(my_id: int, frame_id: int, payload_bytes: int) -> str:
-    if payload_bytes < 2:
-        raise ValueError("--payload-bytes must be >= 2.")
-    # Seq is 2 chars (0-255 rollover)
-    header = f"{(frame_id % 256):02x}"
-    dummy_len = payload_bytes - 2
-    # Fill with 'x' or similar dummy data
-    return header + ("x" * dummy_len)
-
-def sleep_until(deadline_mono: float, busy_tail_s: float = 0.002):
-    while True:
-        now = time.monotonic()
-        remain = deadline_mono - now
-        if remain <= 0:
-            return
-        if remain > busy_tail_s:
-            time.sleep(remain - busy_tail_s)
-        else:
-            pass
-
-def init_radio_robot(ser, args):
-    init_radio(ser, args.robotid, args)
 
 def run_client(args):
     verbose = not args.quiet
-    
-    # If robots provided without frame, auto-calculate it to stay in sync with server
+
     if args.frame is None:
         if args.robots:
             robots = parse_robots(args.robots)
@@ -662,7 +764,7 @@ def run_client(args):
             if verbose:
                 print(f"[AUTO-FRAME] Calculated frame duration: {args.frame:.4f}s for N={num_robots} robots")
         else:
-            args.frame = 1.5 # Legacy default fallback
+            args.frame = 1.5
             if verbose:
                 print(f"[WRN] --frame not provided and --robots missing. Using default {args.frame}s")
 
@@ -670,53 +772,41 @@ def run_client(args):
     bw_code = parse_bw_to_code(args.bw)
 
     if verbose:
-        print(f"[CFG] PORT={port} BAUD={args.baud} MY_ID={args.robotid} MASTER={args.master} "
-              f"sf={args.sf} bw_code={bw_code} cr={args.cr} pre={args.preamble} "
-              f"slot={args.slot:.3f}s base={args.base_delay:.3f}s off={args.tx_offset:.3f}s "
-              f"payload={args.payload_bytes}B rx_delay={args.rx_delay_ms:.1f}ms busy_tail={args.busy_tail_ms:.1f}ms")
+        print(
+            f"[CFG] PORT={port} BAUD={args.baud} MY_ID={args.robotid} MASTER={args.master} "
+            f"sf={args.sf} bw_code={bw_code} cr={args.cr} pre={args.preamble} "
+            f"slot={args.slot:.3f}s base={args.base_delay:.3f}s off={args.tx_offset:.3f}s "
+            f"rx_delay={args.rx_delay_ms:.1f}ms busy_tail={args.busy_tail_ms:.1f}ms"
+        )
 
     ser = serial.Serial(port, args.baud, timeout=0.1)
     init_radio_robot(ser, args)
 
     if verbose:
-        print("TDMA Robot (calibrated) running...")
+        print("TDMA Robot (broadcast-pos mode) running...")
 
     last_frame = None
     rx_delay_s = args.rx_delay_ms / 1000.0
     busy_tail_s = max(0.0, args.busy_tail_ms / 1000.0)
-    
-    # Store the timeout threshold (e.g. 5 missed frames)
-    # To prevent multiple robots from becoming Server at the exact same moment,
-    # we add a staggered delay based on their robotid. 
-    # Robot 1 waits base + 0s. Robot 2 waits base + 6s. Robot 3 waits base + 12s, etc.
-    # We need a large stagger because the LoRa module takes ~5 seconds to Soft Reset (ATZ) 
-    # and reconfigure itself as a Master before it can send the first beacon!
-    
-    # Normally master=1. If ID 1 is currently a client, it should failover first.
-    # If ID 1 goes down, ID 2 failovers next.
+
     base_failover_s = args.frame * 5.0
     stagger_delay_s = max(0.0, (args.robotid - 1) * 6.0)
     failover_timeout_s = base_failover_s + stagger_delay_s
-    
+
     last_beacon_mono = time.monotonic()
+    peer_table: Dict[int, Dict[str, Any]] = {}
 
     while True:
-        # Check for failover if acting as a client under --auto-role
         if args.auto_role and (time.monotonic() - last_beacon_mono) > failover_timeout_s:
             if verbose:
                 print(f"[!] No beacons for {failover_timeout_s:.1f}s (Staggered for ID {args.robotid}). Server died! Commencing Failover...")
-            
-            # Flush any pending data before we switch roles
+
             ser.reset_input_buffer()
             ser.close()
             print("====== Switching to SERVER mode (Failover) ======")
-            
-            # When we take over, we MUST act as the new MASTER (address 1)
-            # so the remaining clients don't have to change their configuration.
-            # We rewrite args.master to be 1.
+
             args.master = 1
-            
-            # Exclude ourselves from the robots list so the new server doesn't wait for our own packets
+
             if args.robots:
                 r_list = parse_robots(args.robots)
                 if args.robotid in r_list:
@@ -726,9 +816,8 @@ def run_client(args):
                     print(f"[*] New robot list for server: {args.robots}")
 
             run_server(args)
-            return  # run_server handles the infinite loop from here
+            return
 
-        # Calculate late drop threshold: use parameter or dynamic default
         if args.late_drop_ms is not None:
             late_drop_s = args.late_drop_ms / 1000.0
         else:
@@ -744,128 +833,147 @@ def run_client(args):
 
         src, ln, data, rssi, snr = r
 
+        # 1) Beacon handling
         b = parse_beacon(data)
-        if not b:
-            continue
+        if b:
+            last_beacon_mono = time.monotonic()
 
-        # If we reach here, we got a valid beacon!
-        # Reset our failover watchdog so we don't promote ourselves
-        last_beacon_mono = time.monotonic()
+            master_pos = b["master_pos"]
+            if master_pos:
+                update_peer_table(
+                    peer_table,
+                    master_pos["id"],
+                    role="master",
+                    x=master_pos["x"],
+                    y=master_pos["y"],
+                    heading=master_pos["heading"],
+                    status=master_pos["status"],
+                    seq=master_pos["seq"],
+                    rssi=rssi,
+                    snr=snr,
+                    src_addr=src,
+                )
 
-        frame = b["frame"]
-        if frame == last_frame:
-            continue
-        last_frame = frame
+            frame = b["frame"]
+            if frame == last_frame:
+                continue
+            last_frame = frame
 
-        read_m = time.monotonic()
-        beacon_rx_m = read_m - rx_delay_s
-        
-        # Rank-based slot index
-        robots = parse_robots(args.robots)
-        robot_order = {rid: i for i, rid in enumerate(sorted(robots))}
-        if args.robotid not in robot_order:
+            read_m = time.monotonic()
+            beacon_rx_m = read_m - rx_delay_s
+
+            robots = parse_robots(args.robots)
+            robot_order = {rid: i for i, rid in enumerate(sorted(robots))}
+            if args.robotid not in robot_order:
+                if verbose:
+                    print(f"[ERR] robotid {args.robotid} not in robots list {args.robots}")
+                time.sleep(1)
+                continue
+
+            slot_index = robot_order[args.robotid]
+            tx_time = beacon_rx_m + args.base_delay + slot_index * args.slot + args.tx_offset
+            now_m = time.monotonic()
+
+            if read_m > tx_time:
+                if verbose:
+                    diff_ms = (read_m - tx_time) * 1000.0
+                    print(f"[!] WARNING: Slot is unreachable! Processing finished {diff_ms:.1f}ms AFTER target TX time.")
+                    print(f"    Possible fixes: Increase --base-delay (current: {args.base_delay}s) or decrease --rx-delay-ms (current: {args.rx_delay_ms}ms)")
+
+            if now_m > tx_time + late_drop_s:
+                if verbose:
+                    late_ms = (now_m - beacon_rx_m) * 1000.0
+                    print(f"[SKIP] late frame={frame} now-beacon={late_ms:.1f}ms (threshold={late_drop_s*1000:.1f}ms)")
+                continue
+
+            sleep_until(tx_time, busy_tail_s=busy_tail_s)
+
+            pose = get_local_pose(args)
+            payload_ascii = make_pos_payload(
+                robot_id=args.robotid,
+                seq=(frame % 256),
+                x=pose["x"],
+                y=pose["y"],
+                heading=pose["heading"],
+                status=pose["status"],
+            )
+
+            # Broadcast to all
+            write_cmd(ser, f"AT+SEND=0,{len(payload_ascii)},{payload_ascii}", verbose)
+
+            # Update local self-entry (optional but useful)
+            update_peer_table(
+                peer_table,
+                args.robotid,
+                role="robot",
+                x=pose["x"],
+                y=pose["y"],
+                heading=pose["heading"],
+                status=pose["status"],
+                seq=(frame % 256),
+                rssi=0,
+                snr=0,
+                src_addr=args.robotid,
+            )
+
             if verbose:
-                print(f"[ERR] robotid {args.robotid} not in robots list {args.robots}")
-            time.sleep(1) # Slow down to avoid spamming
-            continue
-        slot_index = robot_order[args.robotid]
-        
-        tx_time = beacon_rx_m + args.base_delay + slot_index * args.slot + args.tx_offset
-        now_m = time.monotonic()
-        
-        # Safety check: If the target TX time is already in the past relative to NOW (read_m),
-        # it means the serial latency (rx_delay) is longer than the reserved base_delay + offsets.
-        if read_m > tx_time:
-            if verbose:
-                diff_ms = (read_m - tx_time) * 1000.0
-                print(f"[!] WARNING: Slot is unreachable! Processing finished {diff_ms:.1f}ms AFTER target TX time.")
-                print(f"    Possible fixes: Increase --base-delay (current: {args.base_delay}s) or decrease --rx-delay-ms (current: {args.rx_delay_ms}ms)")
-
-        if now_m > tx_time + late_drop_s:
-            if verbose:
-                late_ms = (now_m - beacon_rx_m) * 1000.0
-                print(f"[SKIP] late frame={frame} now-beacon={late_ms:.1f}ms (threshold={late_drop_s*1000:.1f}ms)")
+                after_ms = (time.monotonic() - beacon_rx_m) * 1000.0
+                print(f"[SENT] frame={frame} after_beacon={after_ms:.1f}ms RSSI={rssi} SNR={snr} (rx_delay={args.rx_delay_ms:.1f}ms)")
             continue
 
-        sleep_until(tx_time, busy_tail_s=busy_tail_s)
+        # 2) Robot POS broadcast handling
+        pos = parse_pos_payload(data)
+        if pos:
+            # Ignore malformed identity mismatch
+            if pos["id"] != src:
+                if verbose:
+                    print(f"[RX BAD-ID] src={src} payload_id={pos['id']} raw={data}")
+                continue
 
-        payload_ascii = make_payload_ascii(args.robotid, frame, args.payload_bytes)
-        write_cmd(ser, f"AT+SEND={args.master},{len(payload_ascii)},{payload_ascii}", verbose)
+            # Ignore our own packet if looped back
+            if pos["id"] == args.robotid:
+                continue
 
-        if verbose:
-            after_ms = (time.monotonic() - beacon_rx_m) * 1000.0
-            print(f"[SENT] frame={frame} after_beacon={after_ms:.1f}ms RSSI={rssi} SNR={snr} (rx_delay={args.rx_delay_ms:.1f}ms)")
+            update_peer_table(
+                peer_table,
+                pos["id"],
+                role="robot",
+                x=pos["x"],
+                y=pos["y"],
+                heading=pos["heading"],
+                status=pos["status"],
+                seq=pos["seq"],
+                rssi=rssi,
+                snr=snr,
+                src_addr=src,
+            )
 
+            if verbose and args.verbose_log:
+                print(
+                    f"[PEER] id={pos['id']} seq={pos['seq']:02X} "
+                    f"x={pos['x']} y={pos['y']} hdg={pos['heading']} st={pos['status']} "
+                    f"RSSI={rssi} SNR={snr}"
+                )
+            continue
 
 # ============================================================
-# Main Entry Point
+# Discovery / Auto Role / Auto ID
 # ============================================================
-
-def parse_args():
-    ap = argparse.ArgumentParser("TDMA System (Master/Robot)")
-
-    # Execution Mode
-    group = ap.add_mutually_exclusive_group(required=False)
-    group.add_argument("--server", action="store_true", help="Run as TDMA Master")
-    group.add_argument("--client", action="store_true", help="Run as TDMA Robot")
-    group.add_argument("--auto-role", action="store_true", help="Listen for beacons. If none found, become server. Otherwise, become client.")
-    group.add_argument("--auto-id", action="store_true", help="Start as unassigned client, request ID dynamically from Master.")
-
-    # Common Settings
-    ap.add_argument("--port", default=None, help="Serial port: 0->/dev/ttyUSB0 or /dev/ttyUSBX")
-    ap.add_argument("--baud", type=int, default=9600)
-    ap.add_argument("--master", type=int, default=1, help="Network ID of the Master")
-    ap.add_argument("--band", type=int, default=915000000)
-    ap.add_argument("--crfop", type=int, default=22)
-    ap.add_argument("--sf", type=int, default=5)
-    ap.add_argument("--bw", default="500")
-    ap.add_argument("--cr", type=int, default=1)
-    ap.add_argument("--preamble", type=int, default=12)
-    # ap.add_argument("--slot", type=float, default=0.1)
-    # ap.add_argument("--base-delay", type=float, default=0.25)
-    # ap.add_argument("--tx-offset", type=float, default=0.02)
-    ap.add_argument("--slot", type=float, default=0.08)
-    ap.add_argument("--base-delay", type=float, default=0.25)
-    ap.add_argument("--tx-offset", type=float, default=0.016)
-    ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
-
-    # Server Settings
-    ap.add_argument("--robots", default="1-10", help="Comma-separated list (e.g. 2-5) Required for --server or --auto-role or --auto-id")
-    ap.add_argument("--frame", type=float, default=None, help="Frame duration (seconds). If None and --robots set, calculated automatically.")
-    ap.add_argument("--warmup", type=int, default=10, help="Warmup frame ignore count (server)")
-    ap.add_argument("--print-interval", type=int, default=10, help="Print summary every X frames (server)")
-    ap.add_argument("--margin", type=float, default=0.03, help="Time margin for auto calculations")
-    ap.add_argument("--assumed-jitter-ms", type=float, default=1.8, help="Expected timing jitter/error (ms) for auto-frame calculation")
-    ap.add_argument("--auto-calc", action="store_true", help="Auto parameter recommendations (server)")
-    ap.add_argument("--verbose-log", action="store_true", help="Verbose RX debug logging (server)")
-
-    # Client/Auto Settings
-    ap.add_argument("--robotid", type=int, required=False, help="Node ID. Required for --client or --auto-role")
-    ap.add_argument("--payload-bytes", type=int, default=24, help="TX payload size in BYTES (client)")
-    ap.add_argument("--rx-delay-ms", type=float, default=340.0, help="RF to serial latency compensation (client)")
-    ap.add_argument("--busy-tail-ms", type=float, default=2.0, help="Precise timing busy-wait tail (client)")
-    ap.add_argument("--listen-timeout", type=float, default=6.0, help="Wait time in seconds to detect an existing master for --auto-role")
-    ap.add_argument("--late-drop-ms", type=float, default=None, help="Threshold to skip late frames. Defaults to min(30ms, slot*0.3)")
-
-    return ap.parse_args()
 
 def listen_for_beacon(ser: serial.Serial, timeout_s: float, verbose: bool) -> bool:
-    # Clear the buffer first to ensure we aren't processing stale responses
     drain_uart(ser, 0.5, verbose)
-    
-    # Add random jitter to the timeout so multiple nodes starting at once
-    # don't all finish discovery at the exact same millisecond.
+
     actual_timeout = timeout_s + random.uniform(0, 2.0)
-    
+
     if verbose:
         print(f"[*] Listening for existing master beacons for {actual_timeout:.1f}s (jittered)...")
-    
+
     end = time.time() + actual_timeout
     while time.time() < end:
         line = ser.readline().decode(errors="ignore").strip()
         if not line:
             continue
-        
+
         r = parse_rcv(line)
         if not r:
             continue
@@ -876,7 +984,7 @@ def listen_for_beacon(ser: serial.Serial, timeout_s: float, verbose: bool) -> bo
             if verbose:
                 print(f"[!] Master detected! (Beacon from {src}: BCN{b['frame']:04d}@{b['uuid']} RSSI={rssi})")
             return True
-    
+
     if verbose:
         print(f"[*] No master detected after {actual_timeout:.1f}s.")
     return False
@@ -884,15 +992,11 @@ def listen_for_beacon(ser: serial.Serial, timeout_s: float, verbose: bool) -> bo
 def dynamic_run(args):
     port = resolve_port(args.port)
     ser = serial.Serial(port, args.baud, timeout=0.1)
-    
-    # Needs a generic init first so it can listen
-    init_radio_robot(ser, args)  # robot init is the safest base config for listening
-    
+
+    init_radio_robot(ser, args)
     heard_beacon = listen_for_beacon(ser, args.listen_timeout, not args.quiet)
-    
-    # close the temp serial so the actual run_server/run_client can open it normally and cleanly
     ser.close()
-    
+
     if heard_beacon:
         print("====== Switching to CLIENT mode ======")
         run_client(args)
@@ -901,18 +1005,15 @@ def dynamic_run(args):
         run_server(args)
 
 def run_auto_id(args):
-    # Use existing UUID or generate a new one
-    my_uuid = getattr(args, 'my_uuid', None)
+    my_uuid = getattr(args, "my_uuid", None)
     if my_uuid is None:
         my_uuid = f"{random.randint(0, 0xFFFF):04X}"
-        setattr(args, 'my_uuid', my_uuid)
-    
+        setattr(args, "my_uuid", my_uuid)
+
     port = resolve_port(args.port)
-    
-    # Temporarily set robotid to an unassigned very high value
-    # just so we can initialize the radio without conflicting with normal robots.
-    args.robotid = random.randint(30000, 60000) 
-    
+
+    args.robotid = random.randint(30000, 60000)
+
     if not args.quiet:
         print(f"[*] Starting Auto-ID process. My UUID is {my_uuid}")
         print(f"[*] Initial radio setup with temporary ID {args.robotid}")
@@ -920,28 +1021,19 @@ def run_auto_id(args):
     ser = serial.Serial(port, args.baud, timeout=0.1)
     init_radio_robot(ser, args)
 
-    # First Phase: Auto-Role detection
-    # We listen for a beacon just like --auto-role to see if a Master already exists.
     heard_beacon = listen_for_beacon(ser, args.listen_timeout, not args.quiet)
-    
+
     if not heard_beacon:
-        # NO MASTER DETECTED!
-        # We must become the Master ourselves.
-        # Master should always be ID 1.
         args.robotid = 1
         ser.close()
         if not args.quiet:
-            print(f"====== Switching to SERVER mode (ID 1) ======")
+            print("====== Switching to SERVER mode (ID 1) ======")
         run_server(args)
         return
 
-    # Second Phase: A Master exists. We must JOIN.
     assigned_id = None
     rx_delay_s = args.rx_delay_ms / 1000.0
     busy_tail_s = max(0.0, args.busy_tail_ms / 1000.0)
-
-    # To avoid all new robots hitting the JOIN slot at the exact same microsecond, 
-    # we use a simple exponential backoff or randomized wait frame count.
     join_cooldown_frames = random.randint(1, 3)
 
     if not args.quiet:
@@ -956,9 +1048,7 @@ def run_auto_id(args):
         if not r:
             continue
 
-        # We only need the payload data for beacon parsing
         _, _, data, _, _ = r
-        
         b = parse_beacon(data)
         if not b:
             continue
@@ -967,7 +1057,6 @@ def run_auto_id(args):
         offer_uuid = b["offer_uuid"]
         offered_id = b["offer_id"]
 
-        # Check if the beacon contains an offer for our UUID!
         if offer_uuid == my_uuid:
             try:
                 assigned_id = offered_id
@@ -977,52 +1066,90 @@ def run_auto_id(args):
             except Exception as e:
                 if not args.quiet:
                     print(f"[WRN] Failed to apply ID offer: {e}")
-                pass
-               
-        # If we reach here, we heard a beacon but no offer for us.
-        # It's time to send our JOIN request in the designated JOIN slot.
-        # The JOIN slot is dynamically calculated as the slot AFTER the last active robot.
+
         if join_cooldown_frames > 0:
-            join_cooldown_frames = join_cooldown_frames - 1
+            join_cooldown_frames -= 1
             continue
-            
-        # We already have 'frame' from the beacon
+
         read_m = time.monotonic()
         beacon_rx_m = read_m - rx_delay_s
-        
         robot_list = parse_robots(args.robots)
         num_robots = len(robot_list)
-        
-        # The JOIN slot time:
+
         join_tx_time = beacon_rx_m + args.base_delay + (num_robots) * args.slot + args.tx_offset
-        
-        # Wait for the Join slot
         sleep_until(join_tx_time, busy_tail_s=busy_tail_s)
-        
-        # Fire the JOIN request! Format: JOIN:UUID
+
         join_payload = f"JOIN:{my_uuid}"
-        # We send it to Master (args.master)
         write_cmd(ser, f"AT+SEND={args.master},{len(join_payload)},{join_payload}", not args.quiet)
-        
-        # Cooldown before trying again to avoid spamming / colliding constantly
+
         join_cooldown_frames = random.randint(2, 5)
 
-    # We have an assigned ID! Apply it and switch to normal client mode.
-    # Note: Since we are starting via python args, we must technically mark auto_role = True 
-    # so that the failover logic inside run_client() still applies to us.
     args.auto_role = True
     ser.close()
-    
+
     args.robotid = assigned_id
     print(f"====== Transitioning to Normal CLIENT Mode as ID {assigned_id} ======")
     run_client(args)
 
+# ============================================================
+# Main Entry Point
+# ============================================================
+
+def parse_args():
+    ap = argparse.ArgumentParser("TDMA System (Master/Robot) - broadcast position mode")
+
+    group = ap.add_mutually_exclusive_group(required=False)
+    group.add_argument("--server", action="store_true", help="Run as TDMA Master")
+    group.add_argument("--client", action="store_true", help="Run as TDMA Robot")
+    group.add_argument("--auto-role", action="store_true", help="Listen for beacons. If none found, become server. Otherwise, become client.")
+    group.add_argument("--auto-id", action="store_true", help="Start as unassigned client, request ID dynamically from Master.")
+
+    # Common radio
+    ap.add_argument("--port", default=None, help="Serial port: 0->/dev/ttyUSB0 or /dev/ttyUSBX")
+    ap.add_argument("--baud", type=int, default=9600)
+    ap.add_argument("--master", type=int, default=1, help="Network ID of the Master")
+    ap.add_argument("--band", type=int, default=915000000)
+    ap.add_argument("--crfop", type=int, default=22)
+    ap.add_argument("--sf", type=int, default=5)
+    ap.add_argument("--bw", default="500")
+    ap.add_argument("--cr", type=int, default=1)
+    ap.add_argument("--preamble", type=int, default=12)
+    ap.add_argument("--slot", type=float, default=0.08)
+    ap.add_argument("--base-delay", type=float, default=0.25)
+    ap.add_argument("--tx-offset", type=float, default=0.016)
+    ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
+
+    # Timing / summary
+    ap.add_argument("--robots", default="1-10", help="Comma-separated list (e.g. 2-5)")
+    ap.add_argument("--frame", type=float, default=None, help="Frame duration (seconds). If None, calculated automatically.")
+    ap.add_argument("--warmup", type=int, default=10, help="Warmup frame ignore count (server)")
+    ap.add_argument("--print-interval", type=int, default=10, help="Print summary every X frames (server)")
+    ap.add_argument("--margin", type=float, default=0.03, help="Time margin for auto calculations")
+    ap.add_argument("--assumed-jitter-ms", type=float, default=1.8, help="Expected timing jitter/error (ms) for auto-frame calculation")
+    ap.add_argument("--auto-calc", action="store_true", help="Auto parameter recommendations (server)")
+    ap.add_argument("--verbose-log", action="store_true", help="Verbose RX debug logging")
+    ap.add_argument("--peer-timeout-s", type=float, default=5.0, help="Peer stale timeout for table display")
+
+    # Client / auto
+    ap.add_argument("--robotid", type=int, required=False, help="Node ID. Required for --client or --auto-role")
+    ap.add_argument("--rx-delay-ms", type=float, default=340.0, help="RF to serial latency compensation (client)")
+    ap.add_argument("--busy-tail-ms", type=float, default=2.0, help="Precise timing busy-wait tail (client)")
+    ap.add_argument("--listen-timeout", type=float, default=6.0, help="Wait time in seconds to detect an existing master")
+    ap.add_argument("--late-drop-ms", type=float, default=None, help="Threshold to skip late frames. Defaults to min(30ms, slot*0.3)")
+
+    # Local pose (minimal version)
+    ap.add_argument("--x", type=int, default=0, help="Local X position")
+    ap.add_argument("--y", type=int, default=0, help="Local Y position")
+    ap.add_argument("--heading", type=int, default=0, help="Local heading")
+    ap.add_argument("--status", type=int, default=0, help="Local status / battery / state code")
+
+    return ap.parse_args()
+
 def main():
     args = parse_args()
-    
-    # Generate a unique session UUID for tie-breaking and DHCP
-    setattr(args, 'my_uuid', f"{random.randint(0, 0xFFFF):04X}")
-    
+
+    setattr(args, "my_uuid", f"{random.randint(0, 0xFFFF):04X}")
+
     if args.server:
         if not args.robots:
             print("[ERR] --robots is required when running as --server")
@@ -1035,9 +1162,6 @@ def main():
         if args.robotid <= 0 or args.robotid > 65535:
             print("[ERR] --robotid must be 1..65535 (LoRa Address Range)")
             sys.exit(2)
-        if args.payload_bytes < 2:
-            print("[ERR] --payload-bytes must be >= 2")
-            sys.exit(2)
         run_client(args)
     elif args.auto_role:
         if not args.robotid or not args.robots:
@@ -1046,11 +1170,10 @@ def main():
         dynamic_run(args)
     elif args.auto_id:
         if not args.robots:
-            print("[ERR] --robots is required when running as --auto-id, so the bot knows the network size bounds.")
+            print("[ERR] --robots is required when running as --auto-id")
             sys.exit(2)
         run_auto_id(args)
     else:
-        # Default behavior: auto-id
         if not args.quiet:
             print("[INFO] No mode specified. Defaulting to --auto-id")
         run_auto_id(args)
