@@ -840,7 +840,7 @@ def parse_args():
     # Client/Auto Settings
     ap.add_argument("--robotid", type=int, required=False, help="Node ID. Required for --client or --auto-role")
     ap.add_argument("--payload-bytes", type=int, default=24, help="TX payload size in BYTES (client)")
-    ap.add_argument("--rx-delay-ms", type=float, default=160.0, help="RF to serial latency compensation (client)")
+    ap.add_argument("--rx-delay-ms", type=float, default=340.0, help="RF to serial latency compensation (client)")
     ap.add_argument("--busy-tail-ms", type=float, default=2.0, help="Precise timing busy-wait tail (client)")
     ap.add_argument("--listen-timeout", type=float, default=6.0, help="Wait time in seconds to detect an existing master for --auto-role")
     ap.add_argument("--late-drop-ms", type=float, default=None, help="Threshold to skip late frames. Defaults to min(30ms, slot*0.3)")
