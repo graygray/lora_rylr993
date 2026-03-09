@@ -141,22 +141,54 @@ def update_peer_table(
         "src_addr": src_addr,
     }
 
-def print_peer_table(peer_table: Dict[int, Dict[str, Any]], stale_timeout_s: float):
+def print_peer_table(
+    peer_table: Dict[int, Dict[str, Any]],
+    stale_timeout_s: float,
+    expected_ids: Optional[List[int]] = None,
+    master_id: Optional[int] = None,
+):
     print("---- PEER TABLE ----")
-    if not peer_table:
+    now = time.monotonic()
+    id_set = set(peer_table.keys())
+    if expected_ids:
+        id_set.update(expected_ids)
+    if master_id is not None:
+        id_set.add(master_id)
+
+    if not id_set:
         print("(empty)")
         print("--------------------")
         return
 
-    now = time.monotonic()
-    for peer_id in sorted(peer_table.keys()):
-        p = peer_table[peer_id]
-        age = now - p["last_update_mono"]
+    for peer_id in sorted(id_set):
+        p = peer_table.get(peer_id)
+        if p is None:
+            role = "master" if (master_id is not None and peer_id == master_id) else "robot"
+            age = 9999.0
+            seq_text = "--"
+            x = 0
+            y = 0
+            heading = 0
+            status_val = 0
+            rssi = 0
+            snr = 0
+        else:
+            role = p["role"]
+            age = now - p["last_update_mono"]
+            seq_val = p.get("seq", None)
+            seq_text = f"{seq_val:02X}" if isinstance(seq_val, int) else "--"
+            x = p["x"]
+            y = p["y"]
+            heading = p["heading"]
+            status_val = p["status"]
+            rssi = p["rssi"]
+            snr = p["snr"]
+
         stale = "STALE" if age > stale_timeout_s else "OK"
         print(
-            f"ID {peer_id:>3} [{p['role']:^6}] "
-            f"x={p['x']} y={p['y']} hdg={p['heading']} st={p['status']} "
-            f"seq={p['seq']:02X} RSSI={p['rssi']} SNR={p['snr']} age={age:.1f}s {stale}"
+            f"ID {peer_id:>3} [{role:^6}] "
+            f"x={x} y={y} hdg={heading} st={status_val} "
+            f"seq={seq_text} RSSI={rssi} SNR={snr} age={age:.1f}s {stale}"
         )
     print("--------------------")
 
@@ -745,7 +777,12 @@ def run_server(args):
                 print(f"Minimum slot needed ≥ {min_slot_s*1000:.1f} ms")
                 print("-------------------")
 
-            print_peer_table(peer_table, args.peer_timeout_s)
+            print_peer_table(
+                peer_table,
+                args.peer_timeout_s,
+                expected_ids=robots,
+                master_id=server_id,
+            )
             print("========================\n")
 
 # ============================================================
@@ -915,6 +952,14 @@ def run_client(args):
                 snr=0,
                 src_addr=args.robotid,
             )
+
+            if frame % args.print_interval == 0:
+                print_peer_table(
+                    peer_table,
+                    args.peer_timeout_s,
+                    expected_ids=robots,
+                    master_id=args.master,
+                )
 
             if verbose:
                 after_ms = (time.monotonic() - beacon_rx_m) * 1000.0
