@@ -590,13 +590,16 @@ def run_server(args):
                 else:
                     dead_uuids = []
                     for reg_uuid, reg_id in auto_id_registry.items():
-                        if time.monotonic() - last_heard_mono.get(reg_id, 0) > 30:
+                        if time.monotonic() - last_heard_mono.get(reg_id, 0) > args.lease_timeout_s:
                             dead_uuids.append(reg_uuid)
 
                     for dead in dead_uuids:
                         freed_id = auto_id_registry.pop(dead)
                         if verbose:
-                            print(f"[*] Reclaiming inactive ID {freed_id} from UUID {dead} (Silent for >30s)")
+                            print(
+                                f"[*] Reclaiming inactive ID {freed_id} from UUID {dead} "
+                                f"(Silent for >{args.lease_timeout_s:.1f}s)"
+                            )
                         per_expected[freed_id] = 0
                         per_ok[freed_id] = 0
                         per_mismatch[freed_id] = 0
@@ -610,7 +613,10 @@ def run_server(args):
                     used_ids.add(args.master)
 
                     for r_id in robots:
-                        if joined_at_frame.get(r_id, -1) != -1 and time.monotonic() - last_heard_mono.get(r_id, 0) <= 30:
+                        if (
+                            joined_at_frame.get(r_id, -1) != -1
+                            and time.monotonic() - last_heard_mono.get(r_id, 0) <= args.lease_timeout_s
+                        ):
                             used_ids.add(r_id)
 
                     for r_id in robots:
@@ -1174,6 +1180,7 @@ def parse_args():
     ap.add_argument("--auto-calc", action="store_true", help="Auto parameter recommendations (server)")
     ap.add_argument("--verbose-log", action="store_true", help="Verbose RX debug logging")
     ap.add_argument("--peer-timeout-s", type=float, default=5.0, help="Peer stale timeout for table display")
+    ap.add_argument("--lease-timeout-s", type=float, default=30.0, help="Auto-ID lease reclaim timeout in seconds")
 
     # Client / auto
     ap.add_argument("--robotid", type=int, required=False, help="Node ID. Required for --client or --auto-role")
