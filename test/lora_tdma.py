@@ -68,6 +68,21 @@ def at_collect(ser: serial.Serial, cmd: str, wait_s: float, verbose: bool):
         if l and verbose:
             print("[AT]", l)
 
+def at_expect_ok(ser: serial.Serial, cmd: str, wait_s: float, verbose: bool) -> bool:
+    write_cmd(ser, cmd, verbose)
+    end = time.time() + wait_s
+    got_ok = False
+    while time.time() < end:
+        l = ser.readline().decode(errors="ignore").strip()
+        if not l:
+            continue
+        if verbose:
+            print("[AT]", l)
+        if l == "OK":
+            got_ok = True
+            break
+    return got_ok
+
 def wait_ready(ser: serial.Serial, timeout_s: float, verbose: bool) -> bool:
     end = time.time() + timeout_s
     while time.time() < end:
@@ -381,7 +396,22 @@ def lora_airtime_seconds(sf, bw_hz, cr, preamble, payload_bytes):
 
 def init_radio(ser: serial.Serial, my_id: int, args):
     verbose = not args.quiet
-    at_collect(ser, "AT", 0.3, verbose)
+
+    # Robust modem handshake:
+    # 1) Try AT once.
+    # 2) If no response, force ATZ and wait READY.
+    # 3) Retry AT. If still no response, exit with an explicit error.
+    if not at_expect_ok(ser, "AT", 0.5, verbose):
+        if verbose:
+            print("[WRN] No response to AT. Trying ATZ recovery...")
+        write_cmd(ser, "ATZ", verbose)
+        if not wait_ready(ser, 4.0, verbose):
+            print("[ERR] Modem did not become ready after ATZ.")
+            sys.exit(2)
+        if not at_expect_ok(ser, "AT", 0.6, verbose):
+            print("[ERR] Modem not responding to AT after ATZ recovery.")
+            sys.exit(2)
+
     write_cmd(ser, "AT+OPMODE=1", verbose)
     time.sleep(0.6)
 
