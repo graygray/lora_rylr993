@@ -522,8 +522,8 @@ def run_server(args):
     print("TDMA MASTER START")
 
     while True:
-        # Minimal stable version: keep jitter_break disabled by default
-        jitter_break = 0.0
+        # Add micro randomization to avoid persistent phase-lock beacon collisions.
+        jitter_break = random.uniform(-0.002, 0.002)
         start = next_frame_start + jitter_break
         sleep_until(start, busy_tail_s=0.002)
         next_frame_start = start + args.frame - jitter_break
