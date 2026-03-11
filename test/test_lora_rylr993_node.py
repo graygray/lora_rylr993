@@ -1,5 +1,5 @@
 import unittest
-from lora_rylr993.lora_rylr993_node import extract_id_data
+from lora_rylr993.lora_rylr993_node import extract_id_data, parse_rcv
 
 class TestLoraRylr993Node(unittest.TestCase):
 
@@ -24,6 +24,14 @@ class TestLoraRylr993Node(unittest.TestCase):
             extract_id_data(payload),
             ("1234", "5678"),
         )
+
+    def test_parse_rcv_ok(self):
+        line = "+RCV=12,5,hello,-34,10"
+        self.assertEqual(parse_rcv(line), (12, 5, "hello", -34, 10))
+
+    def test_parse_rcv_bad_len(self):
+        line = "+RCV=12,7,hello,-34,10"
+        self.assertIsNone(parse_rcv(line))
 
 if __name__ == '__main__':
     unittest.main()

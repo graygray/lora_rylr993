@@ -18,6 +18,7 @@ S = "${WORKDIR}/git"
 # Dependencies required to run the ROS 2 node
 RDEPENDS:${PN} = " \
     python3-core \
+    python3-pyserial \
     rclpy \
     std-msgs \
 "
