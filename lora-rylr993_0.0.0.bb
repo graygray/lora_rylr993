@@ -16,7 +16,7 @@ SRCREV = "${AUTOREV}"
 S = "${WORKDIR}/git"
 
 # Dependencies required to run the ROS 2 node
-RDEPENDS_${PN} = " \
+RDEPENDS:${PN} = " \
     python3-core \
     rclpy \
     std-msgs \
@@ -25,13 +25,20 @@ RDEPENDS_${PN} = " \
 inherit setuptools3
 
 # Instruct Yocto to package the additional files we installed via setup.py
+# Ensure ros2 run can find the Python console script under lib/<pkg>.
+do_install:append() {
+    bbwarn "libdir=${libdir}"
+    bbwarn "bindir=${bindir}"
+
+    install -d ${D}${libdir}/lora_rylr993
+    if [ -f ${D}${bindir}/lora_rylr993_node ]; then
+        ln -sf ${bindir}/lora_rylr993_node ${D}${libdir}/lora_rylr993/lora_rylr993_node
+    fi
+}
+
+# Instruct Yocto to package the additional files we installed via setup.py and do_install.
 FILES:${PN} += " \
+    ${libdir}/lora_rylr993/lora_rylr993_node \
     ${datadir}/ament_index/resource_index/packages/lora_rylr993 \
     ${datadir}/lora_rylr993/package.xml \
 "
-
-# Print datadir during the build
-do_install:append() {
-    bbnote "The datadir path resolves to: ${datadir}"
-    bbwarn "Just a warning so you definitely see it in the console: datadir=${datadir}"
-}
