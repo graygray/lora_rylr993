@@ -33,5 +33,9 @@ class TestLoraRylr993Node(unittest.TestCase):
         line = "+RCV=12,7,hello,-34,10"
         self.assertIsNone(parse_rcv(line))
 
+    def test_parse_rcv_data_with_commas(self):
+        line = "+RCV=1,10,ABC,DE,FG,-36,8"
+        self.assertEqual(parse_rcv(line), (1, 10, "ABC,DE,FG", -36, 8))
+
 if __name__ == '__main__':
     unittest.main()

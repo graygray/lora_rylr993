@@ -28,6 +28,13 @@ def parse_bw_to_code(bw: str) -> int:
     raise ValueError(f"Unsupported bw: {bw}")
 
 
+def resolve_port(port_arg) -> str:
+    s = str(port_arg).strip()
+    if s.isdigit():
+        return f"/dev/ttyUSB{s}"
+    return s
+
+
 def write_cmd(ser, cmd: str):
     ser.write((cmd + "\r\n").encode())
 
@@ -42,6 +49,13 @@ def at_expect_ok(ser, cmd: str, wait_s: float) -> bool:
     return False
 
 
+def at_collect(ser, cmd: str, wait_s: float):
+    write_cmd(ser, cmd)
+    end = time.time() + wait_s
+    while time.time() < end:
+        _ = ser.readline().decode(errors="ignore").strip()
+
+
 def wait_ready(ser, timeout_s: float) -> bool:
     end = time.time() + timeout_s
     while time.time() < end:
@@ -51,25 +65,49 @@ def wait_ready(ser, timeout_s: float) -> bool:
     return False
 
 
+def drain_uart(ser, seconds: float):
+    end = time.time() + seconds
+    while time.time() < end:
+        _ = ser.readline().decode(errors="ignore").strip()
+
+
 def init_radio(ser, cfg: "LoraConfig") -> bool:
-    # Basic modem handshake and configuration sequence from lora_tdma.py.
+    # Robust modem handshake/config flow aligned with lora_tdma.py.
     if not at_expect_ok(ser, "AT", 0.5):
         write_cmd(ser, "ATZ")
         if not wait_ready(ser, 4.0):
             return False
-        if not at_expect_ok(ser, "AT", 0.6):
+        if not at_expect_ok(ser, "AT", 1.0):
+            return False
+
+    write_cmd(ser, "AT+OPMODE=1")
+    time.sleep(0.6)
+    need_reset = False
+    while True:
+        line = ser.readline().decode(errors="ignore").strip()
+        if not line:
+            break
+        if "Need RESET" in line:
+            need_reset = True
+
+    if need_reset:
+        write_cmd(ser, "ATZ")
+        if not wait_ready(ser, 4.0):
             return False
 
     bw_code = parse_bw_to_code(cfg.bw)
-    params = [
+    at_collect(ser, f"AT+ADDRESS={cfg.address}", 0.6)
+    at_collect(ser, f"AT+BAND={cfg.band}", 0.6)
+    at_collect(ser, f"AT+NETWORKID={cfg.network_id}", 0.6)
+    at_collect(ser, f"AT+PARAMETER={cfg.sf},{bw_code},{cfg.cr_code},{cfg.preamble}", 0.8)
+    at_collect(ser, f"AT+CRFOP={cfg.tx_power}", 0.6)
+    at_collect(ser, "AT+PARAMETER=?", 0.8)
+    drain_uart(ser, 0.8)
+    verify_cmds = [
         f"AT+ADDRESS={cfg.address}",
-        f"AT+NETWORKID={cfg.network_id}",
-        f"AT+PARAMETER={cfg.sf},{bw_code},{cfg.cr_code},{cfg.preamble}",
-        f"AT+CRFOP={cfg.tx_power}",
+        f"AT+NETWORKID={cfg.network_id}"
     ]
-    for cmd in params:
-        at_expect_ok(ser, cmd, 0.5)
-    return True
+    return all(at_expect_ok(ser, cmd, 0.8) for cmd in verify_cmds)
 
 
 def parse_rcv(line: str) -> Optional[Tuple[int, int, str, int, int]]:
@@ -77,12 +115,14 @@ def parse_rcv(line: str) -> Optional[Tuple[int, int, str, int, int]]:
     if not line.startswith("+RCV="):
         return None
     try:
-        body = line[5:]
-        src_s, len_s, data, rssi_s, snr_s = body.split(",", 4)
-        src = int(src_s)
-        ln = int(len_s)
-        rssi = int(rssi_s)
-        snr = int(snr_s)
+        p = line[5:].split(",")
+        if len(p) < 5:
+            return None
+        src = int(p[0])
+        ln = int(p[1])
+        data = ",".join(p[2:-2])
+        rssi = int(p[-2])
+        snr = int(p[-1])
         if ln != len(data):
             return None
         return src, ln, data, rssi, snr
@@ -109,11 +149,12 @@ def extract_id_data(payload: str) -> Optional[Tuple[str, str]]:
 @dataclass
 class LoraConfig:
     port: str = "/dev/ttyUSB0"
-    baud: int = 115200
+    baud: int = 9600
     address: int = 1
+    band: int = 915000000
     network_id: int = 18
-    sf: int = 7
-    bw: str = "125"
+    sf: int = 5
+    bw: str = "500"
     cr_code: int = 1
     preamble: int = 12
     tx_power: int = 22
@@ -141,18 +182,20 @@ class LoraRylr993Node(Node):
 
     def _load_config(self) -> LoraConfig:
         self.declare_parameter("port", "/dev/ttyUSB0")
-        self.declare_parameter("baud", 115200)
+        self.declare_parameter("baud", 9600)
         self.declare_parameter("address", 1)
+        self.declare_parameter("band", 915000000)
         self.declare_parameter("network_id", 18)
-        self.declare_parameter("sf", 7)
-        self.declare_parameter("bw", "125")
+        self.declare_parameter("sf", 5)
+        self.declare_parameter("bw", "500")
         self.declare_parameter("cr_code", 1)
         self.declare_parameter("preamble", 12)
         self.declare_parameter("tx_power", 22)
         return LoraConfig(
-            port=self.get_parameter("port").value,
+            port=resolve_port(self.get_parameter("port").value),
             baud=int(self.get_parameter("baud").value),
             address=int(self.get_parameter("address").value),
+            band=int(self.get_parameter("band").value),
             network_id=int(self.get_parameter("network_id").value),
             sf=int(self.get_parameter("sf").value),
             bw=str(self.get_parameter("bw").value),
@@ -166,10 +209,10 @@ class LoraRylr993Node(Node):
             self.get_logger().error("pyserial is not installed; LoRa bridge is disabled.")
             return
         try:
-            self.ser = serial.Serial(self.cfg.port, self.cfg.baud, timeout=0.05)
+            self.ser = serial.Serial(self.cfg.port, self.cfg.baud, timeout=0.1)
             if init_radio(self.ser, self.cfg):
                 self.get_logger().info(
-                    f"LoRa ready on {self.cfg.port} @ {self.cfg.baud} (addr={self.cfg.address}, net={self.cfg.network_id})"
+                    f"LoRa ready on {self.cfg.port} @ {self.cfg.baud} (addr={self.cfg.address}, band={self.cfg.band}, net={self.cfg.network_id})"
                 )
             else:
                 self.get_logger().error("LoRa init failed (AT/ATZ/READY handshake).")
@@ -217,6 +260,8 @@ class LoraRylr993Node(Node):
                 line = self.ser.readline().decode(errors="ignore").strip()
                 if not line:
                     break
+                if all(ch == "\x00" for ch in line):
+                    continue
                 self.get_logger().info(f"LoRa RX line: {line}")
                 parsed = parse_rcv(line)
                 if parsed is None:
