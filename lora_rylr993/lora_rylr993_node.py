@@ -1,90 +1,27 @@
 import json
-import re
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
 
-def _first_value(obj: Dict[str, object], aliases: Tuple[str, ...]) -> Optional[object]:
-    for key in aliases:
-        if key in obj:
-            return obj[key]
-    return None
-
-
-def _to_number(value: object) -> Optional[float]:
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        return float(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _pick_position_fields(obj: Dict[str, object]) -> Optional[Dict[str, float]]:
-    key_aliases = {
-        'x': ('x',),
-        'y': ('y',),
-        'heading': ('heading', 'yaw'),
-        'status': ('status',),
-        'lat': ('lat', 'latitude'),
-        'lon': ('lon', 'lng', 'longitude'),
-        'alt': ('alt', 'altitude'),
-    }
-
-    out: Dict[str, float] = {}
-    for canonical, aliases in key_aliases.items():
-        val = _first_value(obj, aliases)
-        if val is None:
-            continue
-        num = _to_number(val)
-        if num is not None:
-            out[canonical] = num
-
-    # Accept cartesian (x/y) OR GPS (lat/lon) as valid position payload.
-    has_cartesian = 'x' in out and 'y' in out
-    has_gps = 'lat' in out and 'lon' in out
-    return out if (has_cartesian or has_gps) else None
-
-
-def _extract_position_fields_raw(payload: str) -> Optional[Dict[str, float]]:
-    # 1) Try JSON first.
+def extract_id_data(payload: str) -> Optional[Tuple[str, str]]:
+    """Extract id and data from JSON payload: {"v":2,"id":"bf54","d":"..."}."""
     try:
         obj = json.loads(payload)
-        if isinstance(obj, dict):
-            parsed = _pick_position_fields(obj)
-            if parsed is not None:
-                return parsed
     except json.JSONDecodeError:
-        pass
-
-    # 2) Try key-value text, e.g. "x=1,y=2,heading=90,status=1" or "x:1 y:2".
-    text_obj: Dict[str, str] = {}
-    for key, value in re.findall(r'([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*([^,\s]+)', payload):
-        text_obj[key] = value
-
-    if text_obj:
-        parsed = _pick_position_fields(text_obj)
-        if parsed is not None:
-            return parsed
-
-    return None
-
-
-def _normalize_numeric_types(data: Dict[str, float]) -> Dict[str, object]:
-    out: Dict[str, object] = {}
-    for key, val in data.items():
-        out[key] = int(val) if float(val).is_integer() else val
-    return out
-
-
-def extract_position_fields(payload: str) -> Optional[Dict[str, object]]:
-    parsed = _extract_position_fields_raw(payload)
-    if parsed is None:
         return None
-    return _normalize_numeric_types(parsed)
+
+    if not isinstance(obj, dict):
+        return None
+
+    id_val = obj.get('id')
+    data_val = obj.get('d')
+    if id_val is None or data_val is None:
+        return None
+
+    return str(id_val), str(data_val)
 
 
 class LoraRylr993Node(Node):
@@ -98,21 +35,28 @@ class LoraRylr993Node(Node):
             10,
         )
         self.get_logger().info(
-            'Monitoring /fleet_transmit and publishing position to /fleet_receive'
+            'Monitoring /fleet_transmit and publishing id_data string to /fleet_receive'
         )
 
     def fleet_transmit_callback(self, msg: String):
-        pos_fields = extract_position_fields(msg.data)
-        if pos_fields is None:
+        # Print every received message for monitoring.
+        self.get_logger().info(f'Received /fleet_transmit: {msg.data}')
+
+        parsed = extract_id_data(msg.data)
+        if parsed is None:
             self.get_logger().warning(
-                f'No position fields found in /fleet_transmit payload: "{msg.data}"'
+                'Payload parse failed. Expected JSON with "id" and "d" fields.'
             )
             return
 
+        id_val, data_val = parsed
+        combined = f'{id_val}_{data_val}'
+
         outbound = String()
-        outbound.data = json.dumps(pos_fields, separators=(',', ':'))
+        outbound.data = combined
         self.publisher_.publish(outbound)
-        self.get_logger().info(f'Published /fleet_receive: {outbound.data}')
+        self.get_logger().info(f'Parsed id={id_val}, data={data_val}')
+        self.get_logger().info(f'Published /fleet_receive: {combined}')
 
 
 def main(args=None):

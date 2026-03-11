@@ -1,32 +1,29 @@
 import unittest
-from lora_rylr993.lora_rylr993_node import extract_position_fields
+from lora_rylr993.lora_rylr993_node import extract_id_data
 
 class TestLoraRylr993Node(unittest.TestCase):
 
-    def test_extract_cartesian_from_json(self):
-        payload = '{"x":10,"y":20,"heading":90,"status":1}'
+    def test_extract_id_and_data(self):
+        payload = '{"v":2,"id":"bf54","d":"v1QDALr//QIJgFg6"}'
         self.assertEqual(
-            extract_position_fields(payload),
-            {"x": 10, "y": 20, "heading": 90, "status": 1},
+            extract_id_data(payload),
+            ("bf54", "v1QDALr//QIJgFg6"),
         )
 
-    def test_extract_gps_from_json(self):
-        payload = '{"latitude":25.03,"longitude":121.56,"altitude":44}'
-        self.assertEqual(
-            extract_position_fields(payload),
-            {"lat": 25.03, "lon": 121.56, "alt": 44},
-        )
+    def test_missing_fields_returns_none(self):
+        payload = '{"v":2,"id":"bf54"}'
+        self.assertIsNone(extract_id_data(payload))
 
-    def test_extract_from_key_value_text(self):
-        payload = "x=11,y=22,heading=180,status=2"
-        self.assertEqual(
-            extract_position_fields(payload),
-            {"x": 11, "y": 22, "heading": 180, "status": 2},
-        )
+    def test_invalid_json_returns_none(self):
+        payload = 'id=bf54,d=v1QDALr//QIJgFg6'
+        self.assertIsNone(extract_id_data(payload))
 
-    def test_missing_position_returns_none(self):
-        payload = '{"speed":4.2,"battery":88}'
-        self.assertIsNone(extract_position_fields(payload))
+    def test_non_string_values_are_stringified(self):
+        payload = '{"v":2,"id":1234,"d":5678}'
+        self.assertEqual(
+            extract_id_data(payload),
+            ("1234", "5678"),
+        )
 
 if __name__ == '__main__':
     unittest.main()
