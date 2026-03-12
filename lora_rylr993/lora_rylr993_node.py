@@ -337,6 +337,7 @@ class LoraRylr993Node(Node):
         self.last_frame = -1
         self.last_beacon_mono = time.monotonic()
         self.discovery_deadline_mono = 0.0
+        self.discovery_timeout_s = 0.0
         self.auto_id_seen_beacon = False
         self.join_cooldown_frames = 0
         self.frame_id = 0
@@ -414,6 +415,49 @@ class LoraRylr993Node(Node):
             + float(self.get_parameter("margin").value)
         )
 
+    def _log_auto_frame_if_needed(self, robots: List[int], frame: float):
+        user_frame = float(self.get_parameter("frame").value)
+        if user_frame > 0:
+            return
+        base_delay = float(self.get_parameter("base_delay").value)
+        slot = float(self.get_parameter("slot").value)
+        tx_offset = float(self.get_parameter("tx_offset").value)
+        jitter_s = float(self.get_parameter("assumed_jitter_ms").value) / 1000.0
+        margin = float(self.get_parameter("margin").value)
+        self.get_logger().info(
+            f"[AUTO-FRAME] Calculated frame duration: {frame:.4f}s for N={len(robots)} robots"
+        )
+        self.get_logger().info(
+            f"             (base={base_delay} slot={slot} off={tx_offset} jitter={jitter_s:.4f} guard={margin})"
+        )
+
+    def _log_cfg(self, as_server: bool):
+        robots_expr = str(self.get_parameter("robots").value)
+        robots = parse_robots(robots_expr)
+        frame = self._frame_duration()
+        self._log_auto_frame_if_needed(robots, frame)
+        bw_code = parse_bw_to_code(str(self.get_parameter("bw").value))
+        slot = float(self.get_parameter("slot").value)
+        base_delay = float(self.get_parameter("base_delay").value)
+        tx_offset = float(self.get_parameter("tx_offset").value)
+        if as_server:
+            master = int(self.get_parameter("master").value)
+            self.get_logger().info(
+                f"[CFG] PORT={self.cfg.port} BAUD={self.cfg.baud} MASTER={master} "
+                f"sf={self.cfg.sf} bw_code={bw_code} cr={self.cfg.cr_code} pre={self.cfg.preamble} "
+                f"slot={slot:.3f}s base={base_delay:.3f}s off={tx_offset:.3f}s "
+                f"frame={frame:.4f}s robots={robots_expr}"
+            )
+        else:
+            master = int(self.get_parameter("master").value)
+            self.get_logger().info(
+                f"[CFG] PORT={self.cfg.port} BAUD={self.cfg.baud} MY_ID={self.cfg.address} MASTER={master} "
+                f"sf={self.cfg.sf} bw_code={bw_code} cr={self.cfg.cr_code} pre={self.cfg.preamble} "
+                f"slot={slot:.3f}s base={base_delay:.3f}s off={tx_offset:.3f}s "
+                f"rx_delay={float(self.get_parameter('rx_delay_ms').value):.1f}ms "
+                f"busy_tail={float(self.get_parameter('busy_tail_ms').value):.1f}ms"
+            )
+
     def _set_lora_address(self, new_address: int) -> bool:
         if self.ser is None:
             return False
@@ -461,6 +505,7 @@ class LoraRylr993Node(Node):
         master_id = int(self.get_parameter("master").value)
         if self.cfg.address != master_id:
             self._set_lora_address(master_id)
+        self.get_logger().info(f"====== Switching to SERVER mode (ID {master_id}) ======")
         self.role = "server"
         self.auto_failover = False
         self.frame_id = 0
@@ -468,6 +513,7 @@ class LoraRylr993Node(Node):
         self.pending_offer_uuid = None
         self.pending_offer_id = None
         self.pending_offer_ttl = 0
+        self._log_cfg(as_server=True)
         self.get_logger().info(f"Switched role -> SERVER (id={self.cfg.address})")
 
     def _switch_to_client(self, auto_failover: bool):
@@ -475,27 +521,37 @@ class LoraRylr993Node(Node):
         self.auto_failover = auto_failover
         self.last_frame = -1
         self.last_beacon_mono = time.monotonic()
+        self.get_logger().info("====== Switching to CLIENT mode ======")
+        self._log_cfg(as_server=False)
         self.get_logger().info(
             f"Switched role -> CLIENT (id={self.cfg.address}, auto_failover={self.auto_failover})"
         )
 
     def _switch_to_discovery_auto_role(self):
         self.role = "discovery_auto_role"
-        timeout_s = float(self.get_parameter("listen_timeout").value) + random.uniform(0.0, 2.0)
-        self.discovery_deadline_mono = time.monotonic() + timeout_s
-        self.get_logger().info(f"Switched role -> AUTO_ROLE discovery (timeout={timeout_s:.1f}s)")
+        self.discovery_timeout_s = float(self.get_parameter("listen_timeout").value) + random.uniform(0.0, 2.0)
+        self.discovery_deadline_mono = time.monotonic() + self.discovery_timeout_s
+        self.get_logger().info(
+            f"[*] Listening for existing master beacons for {self.discovery_timeout_s:.1f}s (jittered)..."
+        )
+        self.get_logger().info(f"Switched role -> AUTO_ROLE discovery (timeout={self.discovery_timeout_s:.1f}s)")
 
     def _switch_to_auto_id(self):
         self.role = "auto_id"
         self.auto_id_seen_beacon = False
         self.join_cooldown_frames = random.randint(1, 3)
-        timeout_s = float(self.get_parameter("listen_timeout").value) + random.uniform(0.0, 2.0)
-        self.discovery_deadline_mono = time.monotonic() + timeout_s
+        self.discovery_timeout_s = float(self.get_parameter("listen_timeout").value) + random.uniform(0.0, 2.0)
+        self.discovery_deadline_mono = time.monotonic() + self.discovery_timeout_s
         temp_id = random.randint(30000, 60000)
+        self.get_logger().info(f"[*] Starting Auto-ID process. My UUID is {self.my_uuid}")
+        self.get_logger().info(f"[*] Initial radio setup with temporary ID {temp_id}")
         if self._set_lora_address(temp_id):
             self.get_logger().info(f"Switched role -> AUTO_ID (uuid={self.my_uuid}, temp_id={temp_id})")
         else:
             self.get_logger().warning("AUTO_ID failed to set temporary address.")
+        self.get_logger().info(
+            f"[*] Listening for existing master beacons for {self.discovery_timeout_s:.1f}s (jittered)..."
+        )
 
     def fleet_transmit_callback(self, msg: String):
         # Print every received message from /fleet_transmit.
@@ -587,12 +643,12 @@ class LoraRylr993Node(Node):
 
         elif self.role == "discovery_auto_role":
             if now_m > self.discovery_deadline_mono:
-                self.get_logger().info("AUTO_ROLE: no beacon detected, becoming SERVER.")
+                self.get_logger().info(f"[*] No master detected after {self.discovery_timeout_s:.1f}s.")
                 self._switch_to_server()
 
         elif self.role == "auto_id":
             if (not self.auto_id_seen_beacon) and now_m > self.discovery_deadline_mono:
-                self.get_logger().info("AUTO_ID: no beacon detected, becoming SERVER.")
+                self.get_logger().info(f"[*] No master detected after {self.discovery_timeout_s:.1f}s.")
                 self._switch_to_server()
 
         elif self.role == "client" and self.auto_failover:
