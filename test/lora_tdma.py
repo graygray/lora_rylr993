@@ -238,31 +238,18 @@ def parse_master_pos_field(field: str):
 def make_beacon(
     frame_id: int,
     uuid: str,
-    master_id: int,
-    master_x: int,
-    master_y: int,
-    master_heading: int,
-    master_status: int,
+    payload: str,
     offer_uuid: Optional[str] = None,
     offer_id: Optional[int] = None,
 ) -> str:
     """
     Beacon format:
-    BCN,<frame>,<uuid>,<offer>,P:<master_id>:<seq>:<x>:<y>:<heading>:<status>
+    BCN,<frame>,<uuid>,<offer>,<payload>
     """
     offer_str = ""
     if offer_uuid and offer_id is not None:
         offer_str = f"{offer_uuid}:{offer_id}"
-
-    master_pos = make_master_pos_field(
-        master_id=master_id,
-        seq=(frame_id % 256),
-        x=master_x,
-        y=master_y,
-        heading=master_heading,
-        status=master_status,
-    )
-    return f"BCN,{frame_id:04d},{uuid or ''},{offer_str},{master_pos}"
+    return f"BCN,{frame_id:04d},{uuid or ''},{offer_str},{payload}"
 
 def parse_beacon(data: str):
     """
@@ -321,6 +308,20 @@ def parse_pos_payload(data: str):
             "heading": int(parts[5]),
             "status": int(parts[6]),
         }
+    except:
+        return None
+
+def make_uuid_payload(uuid: str, data16: str) -> str:
+    return f"{uuid}:{data16}"
+
+def parse_uuid_payload(data: str):
+    if ":" not in data:
+        return None
+    try:
+        u, d = data.split(":", 1)
+        if len(u) != 4:
+            return None
+        return {"uuid": u, "data": d}
     except:
         return None
 
@@ -533,14 +534,11 @@ def run_server(args):
             frame_id = 1
 
         pose = get_local_pose(args)
+        beacon_payload = make_uuid_payload(my_uuid, args.data16)
         beacon = make_beacon(
             frame_id=frame_id,
             uuid=my_uuid,
-            master_id=server_id,
-            master_x=pose["x"],
-            master_y=pose["y"],
-            master_heading=pose["heading"],
-            master_status=pose["status"],
+            payload=beacon_payload,
             offer_uuid=pending_offer_uuid,
             offer_id=pending_offer_id,
         )
@@ -681,16 +679,10 @@ def run_server(args):
             if src not in robots or src == server_id:
                 continue
 
-            pos = parse_pos_payload(data)
-            if not pos:
+            msg = parse_uuid_payload(data)
+            if not msg:
                 if args.verbose_log:
                     print(f"[RX BAD] frame={frame_id} from={src} raw={data[:64]}...")
-                continue
-
-            # Use LoRa src address as truth
-            if pos["id"] != src:
-                if args.verbose_log:
-                    print(f"[RX BAD-ID] src={src} payload_id={pos['id']} raw={data}")
                 continue
 
             slot_index = robot_order[src]
@@ -706,17 +698,17 @@ def run_server(args):
                 peer_table,
                 src,
                 role="robot",
-                x=pos["x"],
-                y=pos["y"],
-                heading=pos["heading"],
-                status=pos["status"],
-                seq=pos["seq"],
+                x=0,
+                y=0,
+                heading=0,
+                status=0,
+                seq=(frame_id % 256),
                 rssi=rssi,
                 snr=snr,
                 src_addr=src,
             )
 
-            if pos["seq"] == (frame_id % 256):
+            if True:
                 slot_offset_stats[src].add(slot_offset)
                 beacon_to_rx_stats[src].add(t)
                 if frame_id > joined_at_frame[src] + args.warmup:
@@ -725,15 +717,7 @@ def run_server(args):
                     print(
                         f"[RX OK] frame={frame_id} from={src} "
                         f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms "
-                        f"pos=({pos['x']},{pos['y']}) hdg={pos['heading']} st={pos['status']}"
-                    )
-            else:
-                if frame_id > joined_at_frame[src] + args.warmup:
-                    per_mismatch[src] += 1
-                if args.verbose_log:
-                    print(
-                        f"[RX MISMATCH] expect={frame_id % 256} got={pos['seq']} from={src} "
-                        f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms"
+                        f"uuid={msg['uuid']} data={msg['data']}"
                     )
 
         for r in robots:
@@ -771,17 +755,7 @@ def run_server(args):
                 print(f"Minimum frame needed ≈ {rec_frame*1000:.1f} ms")
                 print(f"Max robots supportable ≈ {rec_max}")
 
-                pose_for_len = get_local_pose(args)
-                pos_payload_len = len(
-                    make_pos_payload(
-                        robot_id=server_id,
-                        seq=0,
-                        x=pose_for_len["x"],
-                        y=pose_for_len["y"],
-                        heading=pose_for_len["heading"],
-                        status=pose_for_len["status"],
-                    )
-                )
+                pos_payload_len = len(make_uuid_payload(my_uuid, args.data16))
 
                 bw_hz = (
                     500000 if str(args.bw) in ("9", "500", "500k", "500000")
@@ -956,15 +930,7 @@ def run_client(args):
 
             sleep_until(tx_time, busy_tail_s=busy_tail_s)
 
-            pose = get_local_pose(args)
-            payload_ascii = make_pos_payload(
-                robot_id=args.robotid,
-                seq=(frame % 256),
-                x=pose["x"],
-                y=pose["y"],
-                heading=pose["heading"],
-                status=pose["status"],
-            )
+            payload_ascii = make_uuid_payload(args.my_uuid, args.data16)
 
             # Broadcast to all
             write_cmd(ser, f"AT+SEND=0,{len(payload_ascii)},{payload_ascii}", verbose)
@@ -974,10 +940,10 @@ def run_client(args):
                 peer_table,
                 args.robotid,
                 role="robot",
-                x=pose["x"],
-                y=pose["y"],
-                heading=pose["heading"],
-                status=pose["status"],
+                x=0,
+                y=0,
+                heading=0,
+                status=0,
                 seq=(frame % 256),
                 rssi=0,
                 snr=0,
@@ -998,27 +964,17 @@ def run_client(args):
             continue
 
         # 2) Robot POS broadcast handling
-        pos = parse_pos_payload(data)
-        if pos:
-            # Ignore malformed identity mismatch
-            if pos["id"] != src:
-                if verbose:
-                    print(f"[RX BAD-ID] src={src} payload_id={pos['id']} raw={data}")
-                continue
-
-            # Ignore our own packet if looped back
-            if pos["id"] == args.robotid:
-                continue
-
+        msg = parse_uuid_payload(data)
+        if msg:
             update_peer_table(
                 peer_table,
-                pos["id"],
+                src,
                 role="robot",
-                x=pos["x"],
-                y=pos["y"],
-                heading=pos["heading"],
-                status=pos["status"],
-                seq=pos["seq"],
+                x=0,
+                y=0,
+                heading=0,
+                status=0,
+                seq=0,
                 rssi=rssi,
                 snr=snr,
                 src_addr=src,
@@ -1026,8 +982,7 @@ def run_client(args):
 
             if verbose and args.verbose_log:
                 print(
-                    f"[PEER] id={pos['id']} seq={pos['seq']:02X} "
-                    f"x={pos['x']} y={pos['y']} hdg={pos['heading']} st={pos['status']} "
+                    f"[PEER] src={src} uuid={msg['uuid']} data={msg['data']} "
                     f"RSSI={rssi} SNR={snr}"
                 )
             continue
@@ -1193,6 +1148,7 @@ def parse_args():
     ap.add_argument("--slot", type=float, default=0.08)
     ap.add_argument("--base-delay", type=float, default=0.25)
     ap.add_argument("--tx-offset", type=float, default=0.016)
+    ap.add_argument("--data16", default="v1QDALr//QIJgFg6", help="Payload data part, e.g. v1QDALr//QIJgFg6")
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
 
     # Timing / summary
