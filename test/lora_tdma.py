@@ -1145,9 +1145,9 @@ def parse_args():
     ap.add_argument("--bw", default="500")
     ap.add_argument("--cr", type=int, default=1)
     ap.add_argument("--preamble", type=int, default=12)
-    ap.add_argument("--slot", type=float, default=0.08)
-    ap.add_argument("--base-delay", type=float, default=0.15)
-    ap.add_argument("--tx-offset", type=float, default=0.016)
+    ap.add_argument("--slot", type=float, default=0.06)
+    ap.add_argument("--base-delay", type=float, default=0.12)
+    ap.add_argument("--tx-offset", type=float, default=0.008)
     ap.add_argument("--data16", default="v1QDALr//QIJgFg6", help="Payload data part, e.g. v1QDALr//QIJgFg6")
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
 
@@ -1156,7 +1156,7 @@ def parse_args():
     ap.add_argument("--frame", type=float, default=None, help="Frame duration (seconds). If None, calculated automatically.")
     ap.add_argument("--warmup", type=int, default=10, help="Warmup frame ignore count (server)")
     ap.add_argument("--print-interval", type=int, default=10, help="Print summary every X frames (server)")
-    ap.add_argument("--margin", type=float, default=0.03, help="Time margin for auto calculations")
+    ap.add_argument("--margin", type=float, default=0.015, help="Time margin for auto calculations")
     ap.add_argument("--assumed-jitter-ms", type=float, default=1.8, help="Expected timing jitter/error (ms) for auto-frame calculation")
     ap.add_argument("--auto-calc", action="store_true", help="Auto parameter recommendations (server)")
     ap.add_argument("--verbose-log", action="store_true", help="Verbose RX debug logging")
@@ -1165,7 +1165,7 @@ def parse_args():
 
     # Client / auto
     ap.add_argument("--robotid", type=int, required=False, help="Node ID. Required for --client or --auto-role")
-    ap.add_argument("--rx-delay-ms", type=float, default=190.0, help="RF to serial latency compensation (client)")
+    ap.add_argument("--rx-delay-ms", type=float, default=166.0, help="RF to serial latency compensation (client)")
     ap.add_argument("--busy-tail-ms", type=float, default=2.0, help="Precise timing busy-wait tail (client)")
     ap.add_argument("--listen-timeout", type=float, default=6.0, help="Wait time in seconds to detect an existing master")
     ap.add_argument("--late-drop-ms", type=float, default=None, help="Threshold to skip late frames. Defaults to min(30ms, slot*0.3)")

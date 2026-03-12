@@ -382,13 +382,13 @@ class LoraRylr993Node(Node):
         self.declare_parameter("tdma_mode", "auto_id")  # server | client | auto_role | auto_id
         self.declare_parameter("master", 1)
         self.declare_parameter("robots", "1-10")
-        self.declare_parameter("base_delay", 0.15)
-        self.declare_parameter("slot", 0.08)
-        self.declare_parameter("tx_offset", 0.016)
+        self.declare_parameter("base_delay", 0.12)
+        self.declare_parameter("slot", 0.06)
+        self.declare_parameter("tx_offset", 0.008)
         self.declare_parameter("frame", 0.0)  # <=0 means auto-calc
-        self.declare_parameter("margin", 0.03)
+        self.declare_parameter("margin", 0.015)
         self.declare_parameter("assumed_jitter_ms", 1.8)
-        self.declare_parameter("rx_delay_ms", 190.0)
+        self.declare_parameter("rx_delay_ms", 166.0)
         self.declare_parameter("busy_tail_ms", 2.0)
         self.declare_parameter("late_drop_ms", 30.0)
         self.declare_parameter("listen_timeout", 6.0)
