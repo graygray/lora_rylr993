@@ -312,6 +312,9 @@ def parse_fleet_payload(data: str) -> Optional[Tuple[str, str]]:
     payload_val = payload_val.strip()
     if not id_val or not payload_val:
         return None
+    # Accept compact token-like ids only; avoids matching beacon CSV bodies.
+    if not all(c.isalnum() or c in ("-", "_") for c in id_val):
+        return None
     return id_val, payload_val
 
 
@@ -691,6 +694,16 @@ class LoraRylr993Node(Node):
                 self._switch_to_server()
 
     def _handle_tdma_rx(self, src: int, data: str, rssi: int, snr: int):
+        fleet_payload = parse_fleet_payload(data)
+        if fleet_payload is not None:
+            id_val, data_val = fleet_payload
+            outbound = String()
+            outbound.data = json.dumps({"v": 2, "id": id_val.lower(), "d": data_val})
+            self.publisher_.publish(outbound)
+            self.get_logger().info(
+                f"Published /fleet_receive from LoRa: {outbound.data}"
+            )
+
         if self.role == "server":
             self._handle_server_rx(src, data)
             return
