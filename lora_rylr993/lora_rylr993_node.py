@@ -315,6 +315,9 @@ def parse_fleet_payload(data: str) -> Optional[Tuple[str, str]]:
     # Accept compact token-like ids only; avoids matching beacon CSV bodies.
     if not all(c.isalnum() or c in ("-", "_") for c in id_val):
         return None
+    # Ignore control/message-type prefixes that are not fleet ids.
+    if id_val.lower() in {"join", "bcn", "pos"}:
+        return None
     return id_val, payload_val
 
 
