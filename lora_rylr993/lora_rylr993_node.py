@@ -381,7 +381,7 @@ class LoraRylr993Node(Node):
         # TDMA runtime params aligned to lora_tdma.py defaults.
         self.declare_parameter("tdma_mode", "auto_id")  # server | client | auto_role | auto_id
         self.declare_parameter("master", 1)
-        self.declare_parameter("robots", "1-4")
+        self.declare_parameter("robots", "1-10")
         self.declare_parameter("base_delay", 0.15)
         self.declare_parameter("slot", 0.08)
         self.declare_parameter("tx_offset", 0.016)

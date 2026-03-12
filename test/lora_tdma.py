@@ -1152,7 +1152,7 @@ def parse_args():
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
 
     # Timing / summary
-    ap.add_argument("--robots", default="1-4", help="Comma-separated list (e.g. 2-5)")
+    ap.add_argument("--robots", default="1-10", help="Comma-separated list (e.g. 2-5)")
     ap.add_argument("--frame", type=float, default=None, help="Frame duration (seconds). If None, calculated automatically.")
     ap.add_argument("--warmup", type=int, default=10, help="Warmup frame ignore count (server)")
     ap.add_argument("--print-interval", type=int, default=10, help="Print summary every X frames (server)")
