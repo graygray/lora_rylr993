@@ -243,26 +243,14 @@ def make_master_pos_field(master_id: int, seq: int, x: int, y: int, heading: int
 def make_beacon(
     frame_id: int,
     uuid: str,
-    master_id: int,
-    master_x: int,
-    master_y: int,
-    master_heading: int,
-    master_status: int,
+    payload: str,
     offer_uuid: Optional[str] = None,
     offer_id: Optional[int] = None,
 ) -> str:
     offer_str = ""
     if offer_uuid and offer_id is not None:
         offer_str = f"{offer_uuid}:{offer_id}"
-    pos = make_master_pos_field(
-        master_id=master_id,
-        seq=(frame_id % 256),
-        x=master_x,
-        y=master_y,
-        heading=master_heading,
-        status=master_status,
-    )
-    return f"BCN,{frame_id:04d},{uuid or ''},{offer_str},{pos}"
+    return f"BCN,{frame_id:04d},{uuid or ''},{offer_str},{payload}"
 
 
 def parse_beacon(data: str):
@@ -356,6 +344,7 @@ class LoraRylr993Node(Node):
         self.auto_id_registry: Dict[str, int] = {}
         self.last_heard_mono: Dict[int, float] = {}
         self.joined_at_frame: Dict[int, int] = {}
+        self.message_fleet_transmit = "0:0"
         self._rx_buffer = ""
         self.ser = None
         self._init_serial()
@@ -574,16 +563,18 @@ class LoraRylr993Node(Node):
             return
 
         id_val, data_val = parsed
-        combined = f"{id_val}_{data_val}"
+        self.message_fleet_transmit = f"{id_val}:{data_val}"
 
         outbound = String()
-        outbound.data = combined
+        outbound.data = self.message_fleet_transmit
         self.publisher_.publish(outbound)
         self.get_logger().info(f"Parsed id={id_val}, data={data_val}")
-        self.get_logger().info(f"Published /fleet_receive: {combined}")
+        self.get_logger().info(
+            f"Updated message_fleet_transmit={self.message_fleet_transmit} and published /fleet_receive"
+        )
 
-        # Bridge parsed data to LoRa.
-        self.send_lora(combined)
+    def _fleet_payload(self) -> str:
+        return self.message_fleet_transmit or "0:0"
 
     def send_lora(self, payload: str, dest: int = 0):
         if self.ser is None:
@@ -647,18 +638,10 @@ class LoraRylr993Node(Node):
                 self.next_frame_start += frame_dur
 
             self.frame_id = 1 if self.frame_id >= 9999 else self.frame_id + 1
-            x = int(self.get_parameter("x").value)
-            y = int(self.get_parameter("y").value)
-            heading = int(self.get_parameter("heading").value)
-            status = int(self.get_parameter("status").value)
             beacon = make_beacon(
                 frame_id=self.frame_id,
                 uuid=self.my_uuid,
-                master_id=self.cfg.address,
-                master_x=x,
-                master_y=y,
-                master_heading=heading,
-                master_status=status,
+                payload=self._fleet_payload(),
                 offer_uuid=self.pending_offer_uuid,
                 offer_id=self.pending_offer_id,
             )
@@ -848,15 +831,11 @@ class LoraRylr993Node(Node):
 
         sleep_until(tx_time, busy_tail_s=busy_tail_s)
 
-        x = int(self.get_parameter("x").value)
-        y = int(self.get_parameter("y").value)
-        heading = int(self.get_parameter("heading").value)
-        status = int(self.get_parameter("status").value)
-        payload = make_pos_payload(my_id, frame % 256, x, y, heading, status)
+        payload = self._fleet_payload()
         self.send_lora(payload)
         after_ms = (time.monotonic() - beacon_rx_m) * 1000.0
         self.get_logger().info(
-            f"TDMA POS sent frame={frame} after_beacon={after_ms:.1f}ms RSSI={rssi} SNR={snr}"
+            f"TDMA payload sent frame={frame} after_beacon={after_ms:.1f}ms RSSI={rssi} SNR={snr}"
         )
 
     def destroy_node(self):
