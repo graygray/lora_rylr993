@@ -1,5 +1,10 @@
 import unittest
-from lora_rylr993.lora_rylr993_node import extract_id_data, parse_rcv
+from lora_rylr993.lora_rylr993_node import (
+    extract_id_data,
+    parse_beacon,
+    parse_pos_payload,
+    parse_rcv,
+)
 
 class TestLoraRylr993Node(unittest.TestCase):
 
@@ -36,6 +41,22 @@ class TestLoraRylr993Node(unittest.TestCase):
     def test_parse_rcv_data_with_commas(self):
         line = "+RCV=1,10,ABC,DE,FG,-36,8"
         self.assertEqual(parse_rcv(line), (1, 10, "ABC,DE,FG", -36, 8))
+
+    def test_parse_beacon_with_offer(self):
+        data = "BCN,0012,77BE,D6AB:3,P:1:0C:10:20:30:1"
+        parsed = parse_beacon(data)
+        self.assertEqual(parsed["frame"], 12)
+        self.assertEqual(parsed["uuid"], "77BE")
+        self.assertEqual(parsed["offer_uuid"], "D6AB")
+        self.assertEqual(parsed["offer_id"], 3)
+        self.assertEqual(parsed["master_pos"]["id"], 1)
+
+    def test_parse_pos_payload(self):
+        data = "POS,2,0A,100,200,90,1"
+        self.assertEqual(
+            parse_pos_payload(data),
+            {"id": 2, "seq": 10, "x": 100, "y": 200, "heading": 90, "status": 1},
+        )
 
 if __name__ == '__main__':
     unittest.main()
