@@ -382,7 +382,7 @@ class LoraRylr993Node(Node):
         self.declare_parameter("tdma_mode", "auto_id")  # server | client | auto_role | auto_id
         self.declare_parameter("master", 1)
         self.declare_parameter("robots", "1-4")
-        self.declare_parameter("base_delay", 0.25)
+        self.declare_parameter("base_delay", 0.15)
         self.declare_parameter("slot", 0.08)
         self.declare_parameter("tx_offset", 0.016)
         self.declare_parameter("frame", 0.0)  # <=0 means auto-calc

@@ -1146,7 +1146,7 @@ def parse_args():
     ap.add_argument("--cr", type=int, default=1)
     ap.add_argument("--preamble", type=int, default=12)
     ap.add_argument("--slot", type=float, default=0.08)
-    ap.add_argument("--base-delay", type=float, default=0.25)
+    ap.add_argument("--base-delay", type=float, default=0.15)
     ap.add_argument("--tx-offset", type=float, default=0.016)
     ap.add_argument("--data16", default="v1QDALr//QIJgFg6", help="Payload data part, e.g. v1QDALr//QIJgFg6")
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
