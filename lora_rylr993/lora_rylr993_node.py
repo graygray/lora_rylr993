@@ -356,6 +356,7 @@ class LoraRylr993Node(Node):
         self.auto_id_registry: Dict[str, int] = {}
         self.last_heard_mono: Dict[int, float] = {}
         self.joined_at_frame: Dict[int, int] = {}
+        self._rx_buffer = ""
         self.ser = None
         self._init_serial()
         self._start_mode()
@@ -600,17 +601,12 @@ class LoraRylr993Node(Node):
             return
         try:
             self._tick_tdma_state()
-            if getattr(self.ser, "in_waiting", 0) <= 0:
-                return
-            for _ in range(20):
-                line = self.ser.readline().decode(errors="ignore").strip()
-                if not line:
-                    break
-                if all(ch == "\x00" for ch in line):
-                    continue
-                self.get_logger().info(f"LoRa RX line: {line}")
+            for line in self._drain_serial_lines(max_lines=80):
                 parsed = parse_rcv(line)
                 if parsed is None:
+                    # Ignore noisy/aux lines unless they look meaningful.
+                    if line not in ("OK",) and not line.startswith("+"):
+                        self.get_logger().info(f"LoRa RX aux: {line}")
                     continue
                 src, _ln, data, rssi, snr = parsed
                 self.get_logger().info(
@@ -619,6 +615,26 @@ class LoraRylr993Node(Node):
                 self._handle_tdma_rx(src, data, rssi, snr)
         except Exception as exc:
             self.get_logger().error(f"LoRa RX polling failed: {exc}")
+
+    def _drain_serial_lines(self, max_lines: int = 80) -> List[str]:
+        if self.ser is None:
+            return []
+        waiting = int(getattr(self.ser, "in_waiting", 0) or 0)
+        if waiting <= 0:
+            return []
+
+        chunk = self.ser.read(waiting).decode(errors="ignore")
+        if not chunk:
+            return []
+
+        # Normalise CR/LF boundaries and keep trailing partial line in buffer.
+        self._rx_buffer += chunk.replace("\r", "\n")
+        parts = self._rx_buffer.split("\n")
+        self._rx_buffer = parts[-1]
+        lines = [p.strip() for p in parts[:-1] if p.strip()]
+        if len(lines) > max_lines:
+            lines = lines[-max_lines:]
+        return lines
 
     def _tick_tdma_state(self):
         now_m = time.monotonic()
