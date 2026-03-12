@@ -651,10 +651,16 @@ class LoraRylr993Node(Node):
                 self.next_frame_start += frame_dur
 
             self.frame_id = 1 if self.frame_id >= 9999 else self.frame_id + 1
+            beacon_payload = self._fleet_payload()
+            if beacon_payload == "0:0":
+                beacon_payload = ""
+                self.get_logger().info(
+                    f"SERVER beacon frame={self.frame_id}: skip default fleet payload 0:0"
+                )
             beacon = make_beacon(
                 frame_id=self.frame_id,
                 uuid=self.my_uuid,
-                payload=self._fleet_payload(),
+                payload=beacon_payload,
                 offer_uuid=self.pending_offer_uuid,
                 offer_id=self.pending_offer_id,
             )
@@ -855,6 +861,11 @@ class LoraRylr993Node(Node):
         sleep_until(tx_time, busy_tail_s=busy_tail_s)
 
         payload = self._fleet_payload()
+        if payload == "0:0":
+            self.get_logger().info(
+                f"TDMA payload skipped frame={frame}: fleet payload is default 0:0"
+            )
+            return
         self.send_lora(payload)
         after_ms = (time.monotonic() - beacon_rx_m) * 1000.0
         self.get_logger().info(
