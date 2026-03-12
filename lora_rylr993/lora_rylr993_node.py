@@ -39,30 +39,40 @@ def write_cmd(ser, cmd: str):
     ser.write((cmd + "\r\n").encode())
 
 
-def at_expect_ok(ser, cmd: str, wait_s: float) -> bool:
+def at_expect_ok(ser, cmd: str, wait_s: float) -> Tuple[bool, list[str]]:
     write_cmd(ser, cmd)
     end = time.time() + wait_s
+    lines: list[str] = []
     while time.time() < end:
         line = ser.readline().decode(errors="ignore").strip()
+        if line:
+            lines.append(line)
         if line == "OK":
-            return True
-    return False
+            return True, lines
+    return False, lines
 
 
-def at_collect(ser, cmd: str, wait_s: float):
+def at_collect(ser, cmd: str, wait_s: float) -> list[str]:
     write_cmd(ser, cmd)
     end = time.time() + wait_s
-    while time.time() < end:
-        _ = ser.readline().decode(errors="ignore").strip()
-
-
-def wait_ready(ser, timeout_s: float) -> bool:
-    end = time.time() + timeout_s
+    lines: list[str] = []
     while time.time() < end:
         line = ser.readline().decode(errors="ignore").strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
+def wait_ready(ser, timeout_s: float) -> Tuple[bool, list[str]]:
+    end = time.time() + timeout_s
+    lines: list[str] = []
+    while time.time() < end:
+        line = ser.readline().decode(errors="ignore").strip()
+        if line:
+            lines.append(line)
         if "+READY" in line:
-            return True
-    return False
+            return True, lines
+    return False, lines
 
 
 def drain_uart(ser, seconds: float):
@@ -71,14 +81,31 @@ def drain_uart(ser, seconds: float):
         _ = ser.readline().decode(errors="ignore").strip()
 
 
-def init_radio(ser, cfg: "LoraConfig") -> bool:
+def _fmt_lines(lines: list[str], max_items: int = 8) -> str:
+    if not lines:
+        return "[]"
+    if len(lines) <= max_items:
+        return "[" + " | ".join(lines) + "]"
+    shown = " | ".join(lines[:max_items])
+    return f"[{shown} | ... +{len(lines) - max_items} more]"
+
+
+def init_radio(ser, cfg: "LoraConfig") -> Tuple[bool, str]:
     # Robust modem handshake/config flow aligned with lora_tdma.py.
-    if not at_expect_ok(ser, "AT", 0.5):
+    debug: list[str] = []
+
+    ok, lines = at_expect_ok(ser, "AT", 0.5)
+    debug.append(f"AT: ok={ok} lines={_fmt_lines(lines)}")
+    if not ok:
         write_cmd(ser, "ATZ")
-        if not wait_ready(ser, 4.0):
-            return False
-        if not at_expect_ok(ser, "AT", 1.0):
-            return False
+        ready_ok, ready_lines = wait_ready(ser, 4.0)
+        debug.append(f"ATZ->READY: ok={ready_ok} lines={_fmt_lines(ready_lines)}")
+        if not ready_ok:
+            return False, " ; ".join(debug)
+        ok, lines = at_expect_ok(ser, "AT", 1.0)
+        debug.append(f"AT(retry): ok={ok} lines={_fmt_lines(lines)}")
+        if not ok:
+            return False, " ; ".join(debug)
 
     write_cmd(ser, "AT+OPMODE=1")
     time.sleep(0.6)
@@ -90,24 +117,37 @@ def init_radio(ser, cfg: "LoraConfig") -> bool:
         if "Need RESET" in line:
             need_reset = True
 
+    debug.append(f"AT+OPMODE=1: need_reset={need_reset}")
     if need_reset:
         write_cmd(ser, "ATZ")
-        if not wait_ready(ser, 4.0):
-            return False
+        ready_ok, ready_lines = wait_ready(ser, 4.0)
+        debug.append(f"ATZ(after Need RESET)->READY: ok={ready_ok} lines={_fmt_lines(ready_lines)}")
+        if not ready_ok:
+            return False, " ; ".join(debug)
 
     bw_code = parse_bw_to_code(cfg.bw)
-    at_collect(ser, f"AT+ADDRESS={cfg.address}", 0.6)
-    at_collect(ser, f"AT+BAND={cfg.band}", 0.6)
-    at_collect(ser, f"AT+NETWORKID={cfg.network_id}", 0.6)
-    at_collect(ser, f"AT+PARAMETER={cfg.sf},{bw_code},{cfg.cr_code},{cfg.preamble}", 0.8)
-    at_collect(ser, f"AT+CRFOP={cfg.tx_power}", 0.6)
-    at_collect(ser, "AT+PARAMETER=?", 0.8)
+    lines = at_collect(ser, f"AT+ADDRESS={cfg.address}", 0.6)
+    debug.append(f"AT+ADDRESS={cfg.address}: lines={_fmt_lines(lines)}")
+    lines = at_collect(ser, f"AT+BAND={cfg.band}", 0.6)
+    debug.append(f"AT+BAND={cfg.band}: lines={_fmt_lines(lines)}")
+    lines = at_collect(ser, f"AT+NETWORKID={cfg.network_id}", 0.6)
+    debug.append(f"AT+NETWORKID={cfg.network_id}: lines={_fmt_lines(lines)}")
+    lines = at_collect(ser, f"AT+PARAMETER={cfg.sf},{bw_code},{cfg.cr_code},{cfg.preamble}", 0.8)
+    debug.append(f"AT+PARAMETER={cfg.sf},{bw_code},{cfg.cr_code},{cfg.preamble}: lines={_fmt_lines(lines)}")
+    lines = at_collect(ser, f"AT+CRFOP={cfg.tx_power}", 0.6)
+    debug.append(f"AT+CRFOP={cfg.tx_power}: lines={_fmt_lines(lines)}")
+    lines = at_collect(ser, "AT+PARAMETER=?", 0.8)
+    debug.append(f"AT+PARAMETER=?: lines={_fmt_lines(lines)}")
     drain_uart(ser, 0.8)
-    verify_cmds = [
-        f"AT+ADDRESS={cfg.address}",
-        f"AT+NETWORKID={cfg.network_id}"
-    ]
-    return all(at_expect_ok(ser, cmd, 0.8) for cmd in verify_cmds)
+
+    verify_cmds = [f"AT+ADDRESS={cfg.address}", f"AT+NETWORKID={cfg.network_id}"]
+    for cmd in verify_cmds:
+        ok, lines = at_expect_ok(ser, cmd, 0.8)
+        debug.append(f"verify {cmd}: ok={ok} lines={_fmt_lines(lines)}")
+        if not ok:
+            return False, " ; ".join(debug)
+
+    return True, " ; ".join(debug)
 
 
 def parse_rcv(line: str) -> Optional[Tuple[int, int, str, int, int]]:
@@ -210,12 +250,14 @@ class LoraRylr993Node(Node):
             return
         try:
             self.ser = serial.Serial(self.cfg.port, self.cfg.baud, timeout=0.1)
-            if init_radio(self.ser, self.cfg):
+            ok, detail = init_radio(self.ser, self.cfg)
+            if ok:
                 self.get_logger().info(
                     f"LoRa ready on {self.cfg.port} @ {self.cfg.baud} (addr={self.cfg.address}, band={self.cfg.band}, net={self.cfg.network_id})"
                 )
+                self.get_logger().info(f"LoRa init detail: {detail}")
             else:
-                self.get_logger().error("LoRa init failed (AT/ATZ/READY handshake).")
+                self.get_logger().error(f"LoRa init failed. Detail: {detail}")
         except Exception as exc:
             self.ser = None
             self.get_logger().error(f"Cannot open LoRa serial port {self.cfg.port}: {exc}")
