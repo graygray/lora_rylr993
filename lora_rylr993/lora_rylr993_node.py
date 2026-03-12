@@ -254,13 +254,14 @@ def make_beacon(
 
 
 def parse_beacon(data: str):
-    # BCN,<frame>,<uuid>,<offer>,P:<master_id>:<seq>:<x>:<y>:<heading>:<status>
+    # BCN,<frame>,<uuid>,<offer>,<payload>
     if not data.startswith("BCN,"):
         return None
     try:
         parts = data.split(",")
         if len(parts) < 5:
             return None
+        payload = ",".join(parts[4:])
         offer_uuid = None
         offer_id = None
         if parts[3] and ":" in parts[3]:
@@ -273,7 +274,8 @@ def parse_beacon(data: str):
             "uuid": parts[2],
             "offer_uuid": offer_uuid,
             "offer_id": offer_id,
-            "master_pos": parse_master_pos_field(parts[4]),
+            "payload": payload,
+            "master_pos": parse_master_pos_field(payload),
         }
     except (TypeError, ValueError):
         return None
@@ -300,6 +302,17 @@ def parse_pos_payload(data: str):
         }
     except (TypeError, ValueError):
         return None
+
+
+def parse_fleet_payload(data: str) -> Optional[Tuple[str, str]]:
+    if not isinstance(data, str) or ":" not in data:
+        return None
+    id_val, payload_val = data.split(":", 1)
+    id_val = id_val.strip()
+    payload_val = payload_val.strip()
+    if not id_val or not payload_val:
+        return None
+    return id_val, payload_val
 
 
 @dataclass
@@ -792,6 +805,16 @@ class LoraRylr993Node(Node):
         beacon = parse_beacon(data)
         if beacon is None:
             return
+
+        fleet_payload = parse_fleet_payload(str(beacon.get("payload", "")))
+        if fleet_payload is not None:
+            id_val, data_val = fleet_payload
+            outbound = String()
+            outbound.data = json.dumps({"v": 2, "id": id_val.lower(), "d": data_val})
+            self.publisher_.publish(outbound)
+            self.get_logger().info(
+                f"Published /fleet_receive from LoRa: {outbound.data}"
+            )
 
         frame = beacon["frame"]
         self.last_beacon_mono = time.monotonic()
