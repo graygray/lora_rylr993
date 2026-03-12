@@ -130,8 +130,6 @@ def init_radio(ser, cfg: "LoraConfig") -> Tuple[bool, str]:
     debug.append(f"AT+ADDRESS={cfg.address}: lines={_fmt_lines(lines)}")
     lines = at_collect(ser, f"AT+BAND={cfg.band}", 0.6)
     debug.append(f"AT+BAND={cfg.band}: lines={_fmt_lines(lines)}")
-    lines = at_collect(ser, f"AT+NETWORKID={cfg.network_id}", 0.6)
-    debug.append(f"AT+NETWORKID={cfg.network_id}: lines={_fmt_lines(lines)}")
     lines = at_collect(ser, f"AT+PARAMETER={cfg.sf},{bw_code},{cfg.cr_code},{cfg.preamble}", 0.8)
     debug.append(f"AT+PARAMETER={cfg.sf},{bw_code},{cfg.cr_code},{cfg.preamble}: lines={_fmt_lines(lines)}")
     lines = at_collect(ser, f"AT+CRFOP={cfg.tx_power}", 0.6)
@@ -140,7 +138,7 @@ def init_radio(ser, cfg: "LoraConfig") -> Tuple[bool, str]:
     debug.append(f"AT+PARAMETER=?: lines={_fmt_lines(lines)}")
     drain_uart(ser, 0.8)
 
-    verify_cmds = [f"AT+ADDRESS={cfg.address}", f"AT+NETWORKID={cfg.network_id}"]
+    verify_cmds = [f"AT+ADDRESS={cfg.address}"]
     for cmd in verify_cmds:
         ok, lines = at_expect_ok(ser, cmd, 0.8)
         debug.append(f"verify {cmd}: ok={ok} lines={_fmt_lines(lines)}")
@@ -192,7 +190,6 @@ class LoraConfig:
     baud: int = 9600
     address: int = 1
     band: int = 915000000
-    network_id: int = 18
     sf: int = 5
     bw: str = "500"
     cr_code: int = 1
@@ -225,7 +222,6 @@ class LoraRylr993Node(Node):
         self.declare_parameter("baud", 9600)
         self.declare_parameter("address", 1)
         self.declare_parameter("band", 915000000)
-        self.declare_parameter("network_id", 18)
         self.declare_parameter("sf", 5)
         self.declare_parameter("bw", "500")
         self.declare_parameter("cr_code", 1)
@@ -236,7 +232,6 @@ class LoraRylr993Node(Node):
             baud=int(self.get_parameter("baud").value),
             address=int(self.get_parameter("address").value),
             band=int(self.get_parameter("band").value),
-            network_id=int(self.get_parameter("network_id").value),
             sf=int(self.get_parameter("sf").value),
             bw=str(self.get_parameter("bw").value),
             cr_code=int(self.get_parameter("cr_code").value),
@@ -253,7 +248,7 @@ class LoraRylr993Node(Node):
             ok, detail = init_radio(self.ser, self.cfg)
             if ok:
                 self.get_logger().info(
-                    f"LoRa ready on {self.cfg.port} @ {self.cfg.baud} (addr={self.cfg.address}, band={self.cfg.band}, net={self.cfg.network_id})"
+                    f"LoRa ready on {self.cfg.port} @ {self.cfg.baud} (addr={self.cfg.address}, band={self.cfg.band})"
                 )
                 self.get_logger().info(f"LoRa init detail: {detail}")
             else:
