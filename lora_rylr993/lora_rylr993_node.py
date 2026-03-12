@@ -72,6 +72,8 @@ def at_expect_ok(ser, cmd: str, wait_s: float) -> Tuple[bool, list[str]]:
         line = ser.readline().decode(errors="ignore").strip()
         if line:
             lines.append(line)
+        else:
+            time.sleep(0.002)
         if line == "OK":
             return True, lines
     return False, lines
@@ -85,6 +87,8 @@ def at_collect(ser, cmd: str, wait_s: float) -> list[str]:
         line = ser.readline().decode(errors="ignore").strip()
         if line:
             lines.append(line)
+        else:
+            time.sleep(0.002)
     return lines
 
 
@@ -95,6 +99,8 @@ def wait_ready(ser, timeout_s: float) -> Tuple[bool, list[str]]:
         line = ser.readline().decode(errors="ignore").strip()
         if line:
             lines.append(line)
+        else:
+            time.sleep(0.002)
         if "+READY" in line:
             return True, lines
     return False, lines
@@ -103,7 +109,9 @@ def wait_ready(ser, timeout_s: float) -> Tuple[bool, list[str]]:
 def drain_uart(ser, seconds: float):
     end = time.time() + seconds
     while time.time() < end:
-        _ = ser.readline().decode(errors="ignore").strip()
+        line = ser.readline().decode(errors="ignore").strip()
+        if not line:
+            time.sleep(0.002)
 
 
 def _fmt_lines(lines: list[str], max_items: int = 8) -> str:
@@ -482,6 +490,8 @@ class LoraRylr993Node(Node):
                     f"LoRa ready on {self.cfg.port} @ {self.cfg.baud} (addr={self.cfg.address}, band={self.cfg.band})"
                 )
                 self.get_logger().info(f"LoRa init detail: {detail}")
+                # Non-blocking reads for ROS timer loop to avoid callback backlog.
+                self.ser.timeout = 0
             else:
                 self.get_logger().error(f"LoRa init failed. Detail: {detail}")
         except Exception as exc:
@@ -590,6 +600,8 @@ class LoraRylr993Node(Node):
             return
         try:
             self._tick_tdma_state()
+            if getattr(self.ser, "in_waiting", 0) <= 0:
+                return
             for _ in range(20):
                 line = self.ser.readline().decode(errors="ignore").strip()
                 if not line:
