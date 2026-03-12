@@ -583,7 +583,7 @@ class LoraRylr993Node(Node):
         cmd = f"AT+SEND={dest},{len(payload)},{payload}"
         try:
             write_cmd(self.ser, cmd)
-            self.get_logger().info(f"LoRa TX dest={dest}: {payload}")
+            self.get_logger().info(f"LoRa TX cmd: {cmd}")
         except Exception as exc:
             self.get_logger().error(f"LoRa TX failed: {exc}")
 
