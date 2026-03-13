@@ -845,6 +845,29 @@ def run_client(args):
     last_beacon_mono = time.monotonic()
     peer_table: Dict[int, Dict[str, Any]] = {}
 
+    def recover_client_serial(reason: str) -> serial.Serial:
+        if verbose:
+            print(f"[WRN] Serial read/write error ({reason}). Attempting port recovery on {port}...")
+        try:
+            ser.close()
+        except Exception:
+            pass
+
+        last_err = None
+        for attempt in range(1, 6):
+            try:
+                s = serial.Serial(port, args.baud, timeout=0.1)
+                if verbose:
+                    print(f"[WRN] Serial recovered on attempt {attempt}.")
+                return s
+            except serial.SerialException as e:
+                last_err = e
+                time.sleep(0.3)
+
+        raise serial.SerialException(
+            f"Failed to recover serial port {port} after 5 attempts: {last_err}"
+        )
+
     while True:
         if args.auto_role and (time.monotonic() - last_beacon_mono) > failover_timeout_s:
             if verbose:
@@ -867,7 +890,11 @@ def run_client(args):
         else:
             late_drop_s = min(0.03, args.slot * 0.3)
 
-        line = ser.readline().decode(errors="ignore").strip()
+        try:
+            line = ser.readline().decode(errors="ignore").strip()
+        except serial.SerialException as e:
+            ser = recover_client_serial(str(e))
+            continue
         if not line:
             continue
 
@@ -949,7 +976,11 @@ def run_client(args):
             payload_ascii = make_uuid_payload(args.my_uuid, args.data16)
 
             # Broadcast to all
-            write_cmd(ser, f"AT+SEND=0,{len(payload_ascii)},{payload_ascii}", verbose)
+            try:
+                write_cmd(ser, f"AT+SEND=0,{len(payload_ascii)},{payload_ascii}", verbose)
+            except serial.SerialException as e:
+                ser = recover_client_serial(str(e))
+                continue
 
             # Update local self-entry (optional but useful)
             update_peer_table(
