@@ -388,6 +388,7 @@ class LoraRylr993Node(Node):
         self.last_heard_mono: Dict[int, float] = {}
         self.joined_at_frame: Dict[int, int] = {}
         self.message_fleet_transmit = "0:0"
+        self._last_fleet_transmit_rx: Optional[str] = None
         self._last_fleet_receive_key: Optional[str] = None
         self._rx_buffer = ""
         self.ser = None
@@ -618,7 +619,14 @@ class LoraRylr993Node(Node):
             return
 
         id_val, data_val = parsed
-        self.message_fleet_transmit = f"{id_val}:{data_val}"
+        new_payload = f"{id_val}:{data_val}"
+        if new_payload == self._last_fleet_transmit_rx:
+            self.get_logger().info(
+                f"Dropped duplicate /fleet_transmit payload: {new_payload}"
+            )
+            return
+        self._last_fleet_transmit_rx = new_payload
+        self.message_fleet_transmit = new_payload
         self.get_logger().info(f"Parsed id={id_val}, data={data_val}")
         self.get_logger().info(f"Updated message_fleet_transmit={self.message_fleet_transmit} for LoRa TX")
 
@@ -635,16 +643,18 @@ class LoraRylr993Node(Node):
         self.publisher_.publish(outbound)
         self.get_logger().info(f"Published /fleet_receive from LoRa: {outbound.data}")
 
-    def send_lora(self, payload: str, dest: int = 0):
+    def send_lora(self, payload: str, dest: int = 0) -> bool:
         if self.ser is None:
             self.get_logger().warning("LoRa serial not available, skip AT+SEND.")
-            return
+            return False
         cmd = f"AT+SEND={dest},{len(payload)},{payload}"
         try:
             write_cmd(self.ser, cmd)
             self.get_logger().info(f"LoRa TX cmd: {cmd}")
+            return True
         except Exception as exc:
             self.get_logger().error(f"LoRa TX failed: {exc}")
+            return False
 
     def poll_lora_callback(self):
         if self.ser is None:
@@ -710,7 +720,10 @@ class LoraRylr993Node(Node):
                 offer_uuid=self.pending_offer_uuid,
                 offer_id=self.pending_offer_id,
             )
-            self.send_lora(beacon, dest=0)
+            sent_ok = self.send_lora(beacon, dest=0)
+            if sent_ok and beacon_payload and beacon_payload != "0:0":
+                # One-shot fleet payload: clear after successful LoRa transmission.
+                self.message_fleet_transmit = "0:0"
             if self.pending_offer_ttl > 0:
                 self.pending_offer_ttl -= 1
                 if self.pending_offer_ttl <= 0:
@@ -912,7 +925,10 @@ class LoraRylr993Node(Node):
                 f"TDMA payload skipped frame={frame}: fleet payload is default 0:0"
             )
             return
-        self.send_lora(payload)
+        sent_ok = self.send_lora(payload)
+        if sent_ok:
+            # One-shot fleet payload: clear after successful LoRa transmission.
+            self.message_fleet_transmit = "0:0"
         after_ms = (time.monotonic() - beacon_rx_m) * 1000.0
         self.get_logger().info(
             f"TDMA payload sent frame={frame} after_beacon={after_ms:.1f}ms RSSI={rssi} SNR={snr}"
