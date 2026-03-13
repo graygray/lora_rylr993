@@ -396,7 +396,7 @@ class LoraRylr993Node(Node):
         self.poll_timer = self.create_timer(0.05, self.poll_lora_callback)
 
         self.get_logger().info(
-            "Monitoring /fleet_transmit, parsing {id,d}, publishing to /fleet_receive, and running TDMA role logic"
+            "Monitoring /fleet_transmit, parsing {id,d} for LoRa TX, and publishing /fleet_receive from LoRa RX"
         )
 
     def _load_config(self) -> LoraConfig:
@@ -619,14 +619,8 @@ class LoraRylr993Node(Node):
 
         id_val, data_val = parsed
         self.message_fleet_transmit = f"{id_val}:{data_val}"
-
-        outbound = String()
-        outbound.data = self.message_fleet_transmit
-        self.publisher_.publish(outbound)
         self.get_logger().info(f"Parsed id={id_val}, data={data_val}")
-        self.get_logger().info(
-            f"Updated message_fleet_transmit={self.message_fleet_transmit} and published /fleet_receive"
-        )
+        self.get_logger().info(f"Updated message_fleet_transmit={self.message_fleet_transmit} for LoRa TX")
 
     def _fleet_payload(self) -> str:
         return self.message_fleet_transmit or "0:0"
