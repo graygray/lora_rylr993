@@ -505,8 +505,14 @@ class LoraRylr993Node(Node):
         if self.ser is None:
             return False
         raw_lines: Optional[list[str]] = [] if self.debug_raw_uart else None
-        lines = at_collect(self.ser, f"AT+ADDRESS={new_address}", 0.6, raw_lines=raw_lines)
-        ok, verify_lines = at_expect_ok(self.ser, f"AT+ADDRESS={new_address}", 0.8, raw_lines=raw_lines)
+        prev_timeout = self.ser.timeout
+        # Use blocking line reads during AT re-address to avoid fragmented tokens in logs.
+        self.ser.timeout = 0.1
+        try:
+            lines = at_collect(self.ser, f"AT+ADDRESS={new_address}", 0.6, raw_lines=raw_lines)
+            ok, verify_lines = at_expect_ok(self.ser, f"AT+ADDRESS={new_address}", 0.8, raw_lines=raw_lines)
+        finally:
+            self.ser.timeout = prev_timeout
         msg = f"Set address={new_address}: lines={_fmt_lines(lines)} verify_ok={ok} verify={_fmt_lines(verify_lines)}"
         if raw_lines is not None:
             msg += f" raw_uart={_fmt_raw_lines(raw_lines)}"
@@ -552,6 +558,8 @@ class LoraRylr993Node(Node):
         master_id = int(self.get_parameter("master").value)
         if self.cfg.address != master_id:
             self._set_lora_address(master_id)
+        self.message_fleet_transmit = "0:0"
+        self._last_fleet_receive_key = None
         self.get_logger().info(f"====== Switching to SERVER mode (ID {master_id}) ======")
         self.role = "server"
         self.auto_failover = False
