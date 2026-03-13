@@ -64,12 +64,21 @@ def write_cmd(ser, cmd: str):
     ser.write((cmd + "\r\n").encode())
 
 
-def at_expect_ok(ser, cmd: str, wait_s: float) -> Tuple[bool, list[str]]:
+def _readline_text(ser, raw_lines: Optional[list[str]] = None) -> str:
+    raw = ser.readline()
+    if raw and raw_lines is not None:
+        raw_lines.append(repr(raw))
+    return raw.decode(errors="ignore").strip()
+
+
+def at_expect_ok(
+    ser, cmd: str, wait_s: float, raw_lines: Optional[list[str]] = None
+) -> Tuple[bool, list[str]]:
     write_cmd(ser, cmd)
     end = time.time() + wait_s
     lines: list[str] = []
     while time.time() < end:
-        line = ser.readline().decode(errors="ignore").strip()
+        line = _readline_text(ser, raw_lines=raw_lines)
         if line:
             lines.append(line)
         else:
@@ -79,12 +88,12 @@ def at_expect_ok(ser, cmd: str, wait_s: float) -> Tuple[bool, list[str]]:
     return False, lines
 
 
-def at_collect(ser, cmd: str, wait_s: float) -> list[str]:
+def at_collect(ser, cmd: str, wait_s: float, raw_lines: Optional[list[str]] = None) -> list[str]:
     write_cmd(ser, cmd)
     end = time.time() + wait_s
     lines: list[str] = []
     while time.time() < end:
-        line = ser.readline().decode(errors="ignore").strip()
+        line = _readline_text(ser, raw_lines=raw_lines)
         if line:
             lines.append(line)
         else:
@@ -92,11 +101,11 @@ def at_collect(ser, cmd: str, wait_s: float) -> list[str]:
     return lines
 
 
-def wait_ready(ser, timeout_s: float) -> Tuple[bool, list[str]]:
+def wait_ready(ser, timeout_s: float, raw_lines: Optional[list[str]] = None) -> Tuple[bool, list[str]]:
     end = time.time() + timeout_s
     lines: list[str] = []
     while time.time() < end:
-        line = ser.readline().decode(errors="ignore").strip()
+        line = _readline_text(ser, raw_lines=raw_lines)
         if line:
             lines.append(line)
         else:
@@ -106,10 +115,10 @@ def wait_ready(ser, timeout_s: float) -> Tuple[bool, list[str]]:
     return False, lines
 
 
-def drain_uart(ser, seconds: float):
+def drain_uart(ser, seconds: float, raw_lines: Optional[list[str]] = None):
     end = time.time() + seconds
     while time.time() < end:
-        line = ser.readline().decode(errors="ignore").strip()
+        line = _readline_text(ser, raw_lines=raw_lines)
         if not line:
             time.sleep(0.002)
 
@@ -123,19 +132,29 @@ def _fmt_lines(lines: list[str], max_items: int = 8) -> str:
     return f"[{shown} | ... +{len(lines) - max_items} more]"
 
 
-def init_radio(ser, cfg: "LoraConfig") -> Tuple[bool, str]:
+def _fmt_raw_lines(lines: list[str], max_items: int = 12) -> str:
+    if not lines:
+        return "[]"
+    if len(lines) <= max_items:
+        return "[" + " | ".join(lines) + "]"
+    shown = " | ".join(lines[:max_items])
+    return f"[{shown} | ... +{len(lines) - max_items} more]"
+
+
+def init_radio(ser, cfg: "LoraConfig", debug_raw_uart: bool = False) -> Tuple[bool, str]:
     # Robust modem handshake/config flow aligned with lora_tdma.py.
     debug: list[str] = []
+    raw_lines: Optional[list[str]] = [] if debug_raw_uart else None
 
-    ok, lines = at_expect_ok(ser, "AT", 0.5)
+    ok, lines = at_expect_ok(ser, "AT", 0.5, raw_lines=raw_lines)
     debug.append(f"AT: ok={ok} lines={_fmt_lines(lines)}")
     if not ok:
         write_cmd(ser, "ATZ")
-        ready_ok, ready_lines = wait_ready(ser, 4.0)
+        ready_ok, ready_lines = wait_ready(ser, 4.0, raw_lines=raw_lines)
         debug.append(f"ATZ->READY: ok={ready_ok} lines={_fmt_lines(ready_lines)}")
         if not ready_ok:
             return False, " ; ".join(debug)
-        ok, lines = at_expect_ok(ser, "AT", 1.0)
+        ok, lines = at_expect_ok(ser, "AT", 1.0, raw_lines=raw_lines)
         debug.append(f"AT(retry): ok={ok} lines={_fmt_lines(lines)}")
         if not ok:
             return False, " ; ".join(debug)
@@ -144,7 +163,7 @@ def init_radio(ser, cfg: "LoraConfig") -> Tuple[bool, str]:
     time.sleep(0.6)
     need_reset = False
     while True:
-        line = ser.readline().decode(errors="ignore").strip()
+        line = _readline_text(ser, raw_lines=raw_lines)
         if not line:
             break
         if "Need RESET" in line:
@@ -153,31 +172,35 @@ def init_radio(ser, cfg: "LoraConfig") -> Tuple[bool, str]:
     debug.append(f"AT+OPMODE=1: need_reset={need_reset}")
     if need_reset:
         write_cmd(ser, "ATZ")
-        ready_ok, ready_lines = wait_ready(ser, 4.0)
+        ready_ok, ready_lines = wait_ready(ser, 4.0, raw_lines=raw_lines)
         debug.append(f"ATZ(after Need RESET)->READY: ok={ready_ok} lines={_fmt_lines(ready_lines)}")
         if not ready_ok:
             return False, " ; ".join(debug)
 
     bw_code = parse_bw_to_code(cfg.bw)
-    lines = at_collect(ser, f"AT+ADDRESS={cfg.address}", 0.6)
+    lines = at_collect(ser, f"AT+ADDRESS={cfg.address}", 0.6, raw_lines=raw_lines)
     debug.append(f"AT+ADDRESS={cfg.address}: lines={_fmt_lines(lines)}")
-    lines = at_collect(ser, f"AT+BAND={cfg.band}", 0.6)
+    lines = at_collect(ser, f"AT+BAND={cfg.band}", 0.6, raw_lines=raw_lines)
     debug.append(f"AT+BAND={cfg.band}: lines={_fmt_lines(lines)}")
-    lines = at_collect(ser, f"AT+PARAMETER={cfg.sf},{bw_code},{cfg.cr_code},{cfg.preamble}", 0.8)
+    lines = at_collect(
+        ser, f"AT+PARAMETER={cfg.sf},{bw_code},{cfg.cr_code},{cfg.preamble}", 0.8, raw_lines=raw_lines
+    )
     debug.append(f"AT+PARAMETER={cfg.sf},{bw_code},{cfg.cr_code},{cfg.preamble}: lines={_fmt_lines(lines)}")
-    lines = at_collect(ser, f"AT+CRFOP={cfg.tx_power}", 0.6)
+    lines = at_collect(ser, f"AT+CRFOP={cfg.tx_power}", 0.6, raw_lines=raw_lines)
     debug.append(f"AT+CRFOP={cfg.tx_power}: lines={_fmt_lines(lines)}")
-    lines = at_collect(ser, "AT+PARAMETER=?", 0.8)
+    lines = at_collect(ser, "AT+PARAMETER=?", 0.8, raw_lines=raw_lines)
     debug.append(f"AT+PARAMETER=?: lines={_fmt_lines(lines)}")
-    drain_uart(ser, 0.8)
+    drain_uart(ser, 0.8, raw_lines=raw_lines)
 
     verify_cmds = [f"AT+ADDRESS={cfg.address}"]
     for cmd in verify_cmds:
-        ok, lines = at_expect_ok(ser, cmd, 0.8)
+        ok, lines = at_expect_ok(ser, cmd, 0.8, raw_lines=raw_lines)
         debug.append(f"verify {cmd}: ok={ok} lines={_fmt_lines(lines)}")
         if not ok:
             return False, " ; ".join(debug)
 
+    if raw_lines is not None:
+        debug.append(f"raw_uart={_fmt_raw_lines(raw_lines)}")
     return True, " ; ".join(debug)
 
 
@@ -346,6 +369,7 @@ class LoraRylr993Node(Node):
         )
 
         self.cfg = self._load_config()
+        self.debug_raw_uart = bool(self.get_parameter("debug_raw_uart").value)
         self.my_uuid = f"{random.randint(0, 0xFFFF):04X}"
         self.role = "idle"
         self.auto_failover = False
@@ -364,6 +388,7 @@ class LoraRylr993Node(Node):
         self.last_heard_mono: Dict[int, float] = {}
         self.joined_at_frame: Dict[int, int] = {}
         self.message_fleet_transmit = "0:0"
+        self._last_fleet_receive_key: Optional[str] = None
         self._rx_buffer = ""
         self.ser = None
         self._init_serial()
@@ -384,6 +409,7 @@ class LoraRylr993Node(Node):
         self.declare_parameter("cr_code", 1)
         self.declare_parameter("preamble", 12)
         self.declare_parameter("tx_power", 22)
+        self.declare_parameter("debug_raw_uart", False)
         # TDMA runtime params aligned to lora_tdma.py defaults.
         self.declare_parameter("tdma_mode", "auto_id")  # server | client | auto_role | auto_id
         self.declare_parameter("master", 1)
@@ -478,11 +504,13 @@ class LoraRylr993Node(Node):
     def _set_lora_address(self, new_address: int) -> bool:
         if self.ser is None:
             return False
-        lines = at_collect(self.ser, f"AT+ADDRESS={new_address}", 0.6)
-        ok, verify_lines = at_expect_ok(self.ser, f"AT+ADDRESS={new_address}", 0.8)
-        self.get_logger().info(
-            f"Set address={new_address}: lines={_fmt_lines(lines)} verify_ok={ok} verify={_fmt_lines(verify_lines)}"
-        )
+        raw_lines: Optional[list[str]] = [] if self.debug_raw_uart else None
+        lines = at_collect(self.ser, f"AT+ADDRESS={new_address}", 0.6, raw_lines=raw_lines)
+        ok, verify_lines = at_expect_ok(self.ser, f"AT+ADDRESS={new_address}", 0.8, raw_lines=raw_lines)
+        msg = f"Set address={new_address}: lines={_fmt_lines(lines)} verify_ok={ok} verify={_fmt_lines(verify_lines)}"
+        if raw_lines is not None:
+            msg += f" raw_uart={_fmt_raw_lines(raw_lines)}"
+        self.get_logger().info(msg)
         if ok:
             self.cfg.address = int(new_address)
         return ok
@@ -493,7 +521,7 @@ class LoraRylr993Node(Node):
             return
         try:
             self.ser = serial.Serial(self.cfg.port, self.cfg.baud, timeout=0.1)
-            ok, detail = init_radio(self.ser, self.cfg)
+            ok, detail = init_radio(self.ser, self.cfg, debug_raw_uart=self.debug_raw_uart)
             if ok:
                 self.get_logger().info(
                     f"LoRa ready on {self.cfg.port} @ {self.cfg.baud} (addr={self.cfg.address}, band={self.cfg.band})"
@@ -594,6 +622,16 @@ class LoraRylr993Node(Node):
 
     def _fleet_payload(self) -> str:
         return self.message_fleet_transmit or "0:0"
+
+    def _publish_fleet_receive_from_lora(self, id_val: str, data_val: str):
+        key = f"{id_val.lower()}:{data_val}"
+        if key == self._last_fleet_receive_key:
+            return
+        self._last_fleet_receive_key = key
+        outbound = String()
+        outbound.data = json.dumps({"v": 2, "id": id_val.lower(), "d": data_val})
+        self.publisher_.publish(outbound)
+        self.get_logger().info(f"Published /fleet_receive from LoRa: {outbound.data}")
 
     def send_lora(self, payload: str, dest: int = 0):
         if self.ser is None:
@@ -700,12 +738,7 @@ class LoraRylr993Node(Node):
         fleet_payload = parse_fleet_payload(data)
         if fleet_payload is not None:
             id_val, data_val = fleet_payload
-            outbound = String()
-            outbound.data = json.dumps({"v": 2, "id": id_val.lower(), "d": data_val})
-            self.publisher_.publish(outbound)
-            self.get_logger().info(
-                f"Published /fleet_receive from LoRa: {outbound.data}"
-            )
+            self._publish_fleet_receive_from_lora(id_val, data_val)
 
         if self.role == "server":
             self._handle_server_rx(src, data)
@@ -831,12 +864,7 @@ class LoraRylr993Node(Node):
         fleet_payload = parse_fleet_payload(str(beacon.get("payload", "")))
         if fleet_payload is not None:
             id_val, data_val = fleet_payload
-            outbound = String()
-            outbound.data = json.dumps({"v": 2, "id": id_val.lower(), "d": data_val})
-            self.publisher_.publish(outbound)
-            self.get_logger().info(
-                f"Published /fleet_receive from LoRa: {outbound.data}"
-            )
+            self._publish_fleet_receive_from_lora(id_val, data_val)
 
         frame = beacon["frame"]
         self.last_beacon_mono = time.monotonic()
