@@ -679,11 +679,9 @@ def run_server(args):
             if src not in robots or src == server_id:
                 continue
 
+            # PER/peer tracking is payload-agnostic here:
+            # any packet from the expected source in the expected slot counts.
             msg = parse_uuid_payload(data)
-            if not msg:
-                if args.verbose_log:
-                    print(f"[RX BAD] frame={frame_id} from={src} raw={data[:64]}...")
-                continue
 
             slot_index = robot_order[src]
             t = now_ms(start)
@@ -714,10 +712,14 @@ def run_server(args):
                 if frame_id > joined_at_frame[src] + args.warmup:
                     per_ok[src] += 1
                 if args.verbose_log:
+                    if msg:
+                        payload_info = f"uuid={msg['uuid']} data={msg['data']}"
+                    else:
+                        payload_info = f"raw={data[:64]}..."
                     print(
                         f"[RX OK] frame={frame_id} from={src} "
                         f"t={t:.1f}ms exp={expected:.1f}ms slot_offset={slot_offset:.1f}ms "
-                        f"uuid={msg['uuid']} data={msg['data']}"
+                        f"{payload_info}"
                     )
 
         for r in robots:
@@ -880,6 +882,7 @@ def run_client(args):
         if b:
             last_beacon_mono = time.monotonic()
 
+            frame = b["frame"]
             master_pos = b["master_pos"]
             if master_pos:
                 update_peer_table(
@@ -895,8 +898,21 @@ def run_client(args):
                     snr=snr,
                     src_addr=src,
                 )
-
-            frame = b["frame"]
+            else:
+                # Payload format may vary; still keep master alive using beacon frame SN.
+                update_peer_table(
+                    peer_table,
+                    args.master,
+                    role="master",
+                    x=0,
+                    y=0,
+                    heading=0,
+                    status=0,
+                    seq=(frame % 256),
+                    rssi=rssi,
+                    snr=snr,
+                    src_addr=src,
+                )
             if frame == last_frame:
                 continue
             last_frame = frame
