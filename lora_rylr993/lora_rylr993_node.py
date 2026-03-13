@@ -1,10 +1,13 @@
 import json
+import argparse
 import random
+import sys
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import rclpy
+from rclpy.logging import LoggingSeverity
 from rclpy.node import Node
 from std_msgs.msg import String
 
@@ -358,7 +361,7 @@ class LoraConfig:
 
 
 class LoraRylr993Node(Node):
-    def __init__(self):
+    def __init__(self, enable_log_cli: bool = False):
         super().__init__("lora_rylr993_node")
         self.publisher_ = self.create_publisher(String, "/fleet_receive", 10)
         self.subscription_ = self.create_subscription(
@@ -368,7 +371,11 @@ class LoraRylr993Node(Node):
             10,
         )
 
+        self._enable_log_cli = bool(enable_log_cli)
         self.cfg = self._load_config()
+        self.enable_log = bool(self.get_parameter("enable_log").value)
+        if not self.enable_log:
+            self.get_logger().set_level(LoggingSeverity.FATAL)
         self.debug_raw_uart = bool(self.get_parameter("debug_raw_uart").value)
         self.my_uuid = f"{random.randint(0, 0xFFFF):04X}"
         self.role = "idle"
@@ -401,6 +408,7 @@ class LoraRylr993Node(Node):
         )
 
     def _load_config(self) -> LoraConfig:
+        self.declare_parameter("enable_log", bool(self._enable_log_cli))
         self.declare_parameter("port", "/dev/ttyUSB0")
         self.declare_parameter("baud", 9600)
         self.declare_parameter("address", 1)
@@ -415,11 +423,11 @@ class LoraRylr993Node(Node):
         self.declare_parameter("tdma_mode", "auto_id")  # server | client | auto_role | auto_id
         self.declare_parameter("master", 1)
         self.declare_parameter("robots", "1-10")
-        self.declare_parameter("base_delay", 0.10)
-        self.declare_parameter("slot", 0.05)
-        self.declare_parameter("tx_offset", 0.008)
+        self.declare_parameter("base_delay", 0.12)
+        self.declare_parameter("slot", 0.06)
+        self.declare_parameter("tx_offset", 0.010)
         self.declare_parameter("frame", 0.0)  # <=0 means auto-calc
-        self.declare_parameter("margin", 0.015)
+        self.declare_parameter("margin", 0.020)
         self.declare_parameter("assumed_jitter_ms", 1.8)
         self.declare_parameter("rx_delay_ms", 166.0)
         self.declare_parameter("busy_tail_ms", 2.0)
@@ -944,8 +952,13 @@ class LoraRylr993Node(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = LoraRylr993Node()
+    argv = list(sys.argv[1:] if args is None else args)
+    cli_parser = argparse.ArgumentParser(add_help=False)
+    cli_parser.add_argument("--enable-log", action="store_true", default=False)
+    known, remaining = cli_parser.parse_known_args(argv)
+
+    rclpy.init(args=remaining)
+    node = LoraRylr993Node(enable_log_cli=known.enable_log)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import builtins
 import serial
 import time
 import math
@@ -566,7 +567,7 @@ def run_server(args):
                 pending_offer_uuid = None
                 pending_offer_id = None
 
-        listen_end = start + args.frame - 0.015
+        listen_end = start + args.frame - args.margin
 
         while time.monotonic() < listen_end:
             if ser.in_waiting == 0:
@@ -1192,18 +1193,19 @@ def parse_args():
     ap.add_argument("--bw", default="500")
     ap.add_argument("--cr", type=int, default=1)
     ap.add_argument("--preamble", type=int, default=12)
-    ap.add_argument("--slot", type=float, default=0.05)
-    ap.add_argument("--base-delay", type=float, default=0.10)
-    ap.add_argument("--tx-offset", type=float, default=0.008)
+    ap.add_argument("--slot", type=float, default=0.06)
+    ap.add_argument("--base-delay", type=float, default=0.12)
+    ap.add_argument("--tx-offset", type=float, default=0.010)
     ap.add_argument("--data16", default="v1QDALr//QIJgFg6", help="Payload data part, e.g. v1QDALr//QIJgFg6")
     ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
+    ap.add_argument("--enable-log", action="store_true", default=False, help="Enable runtime logs (default: disabled)")
 
     # Timing / summary
     ap.add_argument("--robots", default="1-10", help="Comma-separated list (e.g. 2-5)")
     ap.add_argument("--frame", type=float, default=None, help="Frame duration (seconds). If None, calculated automatically.")
     ap.add_argument("--warmup", type=int, default=10, help="Warmup frame ignore count (server)")
     ap.add_argument("--print-interval", type=int, default=10, help="Print summary every X frames (server)")
-    ap.add_argument("--margin", type=float, default=0.015, help="Time margin for auto calculations")
+    ap.add_argument("--margin", type=float, default=0.020, help="Time margin for auto calculations")
     ap.add_argument("--assumed-jitter-ms", type=float, default=1.8, help="Expected timing jitter/error (ms) for auto-frame calculation")
     ap.add_argument("--auto-calc", action="store_true", help="Auto parameter recommendations (server)")
     ap.add_argument("--verbose-log", action="store_true", help="Verbose RX debug logging")
@@ -1227,6 +1229,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+    # Default behavior: silence all stdout logging unless explicitly enabled.
+    if not args.enable_log:
+        builtins.print = lambda *a, **k: None
+        args.quiet = True
 
     setattr(args, "my_uuid", f"{random.randint(0, 0xFFFF):04X}")
 
