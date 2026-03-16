@@ -361,7 +361,7 @@ class LoraConfig:
 
 
 class LoraRylr993Node(Node):
-    def __init__(self, enable_log_cli: bool = False):
+    def __init__(self, log_cli: bool = False, log_rx_cli: bool = False, log_calc_cli: bool = False):
         super().__init__("lora_rylr993_node")
         self.publisher_ = self.create_publisher(String, "/fleet_receive", 10)
         self.subscription_ = self.create_subscription(
@@ -371,11 +371,16 @@ class LoraRylr993Node(Node):
             10,
         )
 
-        self._enable_log_cli = bool(enable_log_cli)
+        self._log_cli = bool(log_cli)
+        self._log_rx_cli = bool(log_rx_cli)
+        self._log_calc_cli = bool(log_calc_cli)
         self.cfg = self._load_config()
-        self.enable_log = bool(self.get_parameter("enable_log").value)
-        if not self.enable_log:
-            self.get_logger().set_level(LoggingSeverity.FATAL)
+        self.log = bool(self.get_parameter("log").value)
+        self.log_rx = bool(self.get_parameter("log_rx").value)
+        self.log_calc = bool(self.get_parameter("log_calc").value)
+        if not self.log:
+            # Keep warnings/errors visible while suppressing info/debug logs.
+            self.get_logger().set_level(LoggingSeverity.WARN)
         self.debug_raw_uart = bool(self.get_parameter("debug_raw_uart").value)
         self.my_uuid = f"{random.randint(0, 0xFFFF):04X}"
         self.role = "idle"
@@ -408,7 +413,9 @@ class LoraRylr993Node(Node):
         )
 
     def _load_config(self) -> LoraConfig:
-        self.declare_parameter("enable_log", bool(self._enable_log_cli))
+        self.declare_parameter("log", bool(self._log_cli))
+        self.declare_parameter("log_rx", bool(self._log_rx_cli))
+        self.declare_parameter("log_calc", bool(self._log_calc_cli))
         self.declare_parameter("port", "/dev/ttyUSB0")
         self.declare_parameter("baud", 9600)
         self.declare_parameter("address", 1)
@@ -468,6 +475,8 @@ class LoraRylr993Node(Node):
         )
 
     def _log_auto_frame_if_needed(self, robots: List[int], frame: float):
+        if not self.log_calc:
+            return
         user_frame = float(self.get_parameter("frame").value)
         if user_frame > 0:
             return
@@ -673,13 +682,14 @@ class LoraRylr993Node(Node):
                 parsed = parse_rcv(line)
                 if parsed is None:
                     # Ignore noisy/aux lines unless they look meaningful.
-                    if line not in ("OK",) and not line.startswith("+"):
+                    if self.log_rx and line not in ("OK",) and not line.startswith("+"):
                         self.get_logger().info(f"LoRa RX aux: {line}")
                     continue
                 src, _ln, data, rssi, snr = parsed
-                self.get_logger().info(
-                    f"LoRa RX parsed src={src} data={data} RSSI={rssi} SNR={snr}"
-                )
+                if self.log_rx:
+                    self.get_logger().info(
+                        f"LoRa RX parsed src={src} data={data} RSSI={rssi} SNR={snr}"
+                    )
                 self._handle_tdma_rx(src, data, rssi, snr)
         except Exception as exc:
             self.get_logger().error(f"LoRa RX polling failed: {exc}")
@@ -954,11 +964,13 @@ class LoraRylr993Node(Node):
 def main(args=None):
     argv = list(sys.argv[1:] if args is None else args)
     cli_parser = argparse.ArgumentParser(add_help=False)
-    cli_parser.add_argument("--enable-log", action="store_true", default=False)
+    cli_parser.add_argument("--log", action="store_true", default=False)
+    cli_parser.add_argument("--log-rx", action="store_true", default=False)
+    cli_parser.add_argument("--log-calc", action="store_true", default=False)
     known, remaining = cli_parser.parse_known_args(argv)
 
     rclpy.init(args=remaining)
-    node = LoraRylr993Node(enable_log_cli=known.enable_log)
+    node = LoraRylr993Node(log_cli=known.log, log_rx_cli=known.log_rx, log_calc_cli=known.log_calc)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
