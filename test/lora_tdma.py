@@ -397,7 +397,7 @@ def lora_airtime_seconds(sf, bw_hz, cr, preamble, payload_bytes):
     return t_preamble + t_payload
 
 def init_radio(ser: serial.Serial, my_id: int, args):
-    verbose = not args.quiet
+    verbose = args.log
 
     # Robust modem handshake:
     # 1) Try AT once.
@@ -470,7 +470,7 @@ def parse_rcv(line: str) -> Optional[Tuple[int, int, str, int, int]]:
 # ============================================================
 
 def run_server(args):
-    verbose = not args.quiet
+    verbose = args.log
     robots = parse_robots(args.robots)
     server_id = args.master
 
@@ -544,7 +544,7 @@ def run_server(args):
             offer_id=pending_offer_id,
         )
 
-        write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}", verbose=not args.quiet)
+        write_cmd(ser, f"AT+SEND=0,{len(beacon)},{beacon}", verbose=args.log)
 
         # Update peer table for master itself
         update_peer_table(
@@ -712,7 +712,7 @@ def run_server(args):
                 beacon_to_rx_stats[src].add(t)
                 if frame_id > joined_at_frame[src] + args.warmup:
                     per_ok[src] += 1
-                if args.verbose_log:
+                if args.log_rx:
                     if msg:
                         payload_info = f"uuid={msg['uuid']} data={msg['data']}"
                     else:
@@ -748,7 +748,7 @@ def run_server(args):
             print(f"GLOBAL PER = {gper*100:.3f}%")
 
             active_robots = [r for r in robots if joined_at_frame[r] != -1 and r != server_id]
-            if args.auto_calc and active_robots:
+            if args.log_calc and active_robots:
                 rec_slot = auto_slot(args.frame, args.base_delay, args.tx_offset, active_robots, args.margin, slot_offset_stats)
                 rec_frame = auto_frame(args.slot, args.base_delay, args.tx_offset, active_robots, args.margin, slot_offset_stats)
                 rec_max = auto_max_robots(args.frame, args.slot, args.base_delay, args.tx_offset, args.margin, slot_offset_stats)
@@ -803,7 +803,7 @@ def run_server(args):
 # ============================================================
 
 def run_client(args):
-    verbose = not args.quiet
+    verbose = args.log
 
     if args.frame is None:
         if args.robots:
@@ -1028,7 +1028,7 @@ def run_client(args):
                 src_addr=src,
             )
 
-            if verbose and args.verbose_log:
+            if verbose and args.log_rx:
                 print(
                     f"[PEER] src={src} uuid={msg['uuid']} data={msg['data']} "
                     f"RSSI={rssi} SNR={snr}"
@@ -1073,7 +1073,7 @@ def dynamic_run(args):
     ser = serial.Serial(port, args.baud, timeout=0.1)
 
     init_radio_robot(ser, args)
-    heard_beacon = listen_for_beacon(ser, args.listen_timeout, not args.quiet)
+    heard_beacon = listen_for_beacon(ser, args.listen_timeout, args.log)
     ser.close()
 
     if heard_beacon:
@@ -1093,19 +1093,19 @@ def run_auto_id(args):
 
     args.robotid = random.randint(30000, 60000)
 
-    if not args.quiet:
+    if args.log:
         print(f"[*] Starting Auto-ID process. My UUID is {my_uuid}")
         print(f"[*] Initial radio setup with temporary ID {args.robotid}")
 
     ser = serial.Serial(port, args.baud, timeout=0.1)
     init_radio_robot(ser, args)
 
-    heard_beacon = listen_for_beacon(ser, args.listen_timeout, not args.quiet)
+    heard_beacon = listen_for_beacon(ser, args.listen_timeout, args.log)
 
     if not heard_beacon:
         args.robotid = 1
         ser.close()
-        if not args.quiet:
+        if args.log:
             print("====== Switching to SERVER mode (ID 1) ======")
         run_server(args)
         return
@@ -1115,7 +1115,7 @@ def run_auto_id(args):
     busy_tail_s = max(0.0, args.busy_tail_ms / 1000.0)
     join_cooldown_frames = random.randint(1, 3)
 
-    if not args.quiet:
+    if args.log:
         print("[*] Master detected. Waiting for Beacons to send JOIN request...")
 
     while assigned_id is None:
@@ -1139,11 +1139,11 @@ def run_auto_id(args):
         if offer_uuid == my_uuid:
             try:
                 assigned_id = offered_id
-                if not args.quiet:
+                if args.log:
                     print(f"[!] SUCCESS! Master assigned me ID {assigned_id}. Applying configuration...")
                 break
             except Exception as e:
-                if not args.quiet:
+                if args.log:
                     print(f"[WRN] Failed to apply ID offer: {e}")
 
         if join_cooldown_frames > 0:
@@ -1159,7 +1159,7 @@ def run_auto_id(args):
         sleep_until(join_tx_time, busy_tail_s=busy_tail_s)
 
         join_payload = f"JOIN:{my_uuid}"
-        write_cmd(ser, f"AT+SEND={args.master},{len(join_payload)},{join_payload}", not args.quiet)
+        write_cmd(ser, f"AT+SEND={args.master},{len(join_payload)},{join_payload}", args.log)
 
         join_cooldown_frames = random.randint(2, 5)
 
@@ -1197,8 +1197,7 @@ def parse_args():
     ap.add_argument("--base-delay", type=float, default=0.12)
     ap.add_argument("--tx-offset", type=float, default=0.010)
     ap.add_argument("--data16", default="v1QDALr//QIJgFg6", help="Payload data part, e.g. v1QDALr//QIJgFg6")
-    ap.add_argument("--quiet", action="store_true", help="Suppress verbose logging")
-    ap.add_argument("--enable-log", action="store_true", default=False, help="Enable runtime logs (default: disabled)")
+    ap.add_argument("--log", action="store_true", default=False, help="Enable runtime logs (default: disabled)")
 
     # Timing / summary
     ap.add_argument("--robots", default="1-4", help="Comma-separated list (e.g. 2-5)")
@@ -1207,8 +1206,8 @@ def parse_args():
     ap.add_argument("--print-interval", type=int, default=10, help="Print summary every X frames (server)")
     ap.add_argument("--margin", type=float, default=0.020, help="Time margin for auto calculations")
     ap.add_argument("--assumed-jitter-ms", type=float, default=1.8, help="Expected timing jitter/error (ms) for auto-frame calculation")
-    ap.add_argument("--auto-calc", action="store_true", help="Auto parameter recommendations (server)")
-    ap.add_argument("--verbose-log", action="store_true", help="Verbose RX debug logging")
+    ap.add_argument("--log-calc", action="store_true", default=False, help="Log auto parameter recommendations (server)")
+    ap.add_argument("--log-rx", action="store_true", default=False, help="Verbose RX debug logging")
     ap.add_argument("--peer-timeout-s", type=float, default=5.0, help="Peer stale timeout for table display")
     ap.add_argument("--lease-timeout-s", type=float, default=30.0, help="Auto-ID lease reclaim timeout in seconds")
 
@@ -1229,10 +1228,17 @@ def parse_args():
 
 def main():
     args = parse_args()
-    # Default behavior: silence all stdout logging unless explicitly enabled.
-    if not args.enable_log:
-        builtins.print = lambda *a, **k: None
-        args.quiet = True
+    # Default behavior: silence non-critical stdout logs unless explicitly enabled.
+    # Warnings and errors are always printed.
+    if not args.log:
+        orig_print = builtins.print
+
+        def filtered_print(*a, **k):
+            text = " ".join(str(x) for x in a).upper()
+            if ("[WRN]" in text) or ("[ERR]" in text) or ("WARNING" in text) or ("ERROR" in text):
+                orig_print(*a, **k)
+
+        builtins.print = filtered_print
 
     setattr(args, "my_uuid", f"{random.randint(0, 0xFFFF):04X}")
 
@@ -1260,7 +1266,7 @@ def main():
             sys.exit(2)
         run_auto_id(args)
     else:
-        if not args.quiet:
+        if args.log:
             print("[INFO] No mode specified. Defaulting to --auto-id")
         run_auto_id(args)
 
