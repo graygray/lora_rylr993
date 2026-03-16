@@ -783,11 +783,6 @@ class LoraRylr993Node(Node):
 
         id_val, data_val = parsed
         new_payload = f"{id_val}:{data_val}"
-        if new_payload == self._last_fleet_transmit_rx:
-            self.get_logger().info(
-                f"Dropped duplicate /fleet_transmit payload: {new_payload}"
-            )
-            return
         self._last_fleet_transmit_rx = new_payload
         self.message_fleet_transmit = new_payload
         self.get_logger().info(f"Parsed id={id_val}, data={data_val}")
