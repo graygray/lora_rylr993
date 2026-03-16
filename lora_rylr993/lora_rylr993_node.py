@@ -434,7 +434,6 @@ class LoraRylr993Node(Node):
         self.joined_at_frame: Dict[int, int] = {}
         self.message_fleet_transmit = "0:0"
         self._last_fleet_transmit_rx: Optional[str] = None
-        self._last_fleet_receive_key: Optional[str] = None
         self._rx_buffer = ""
         self.ser = None
         self._init_serial()
@@ -613,7 +612,6 @@ class LoraRylr993Node(Node):
         if self.cfg.address != master_id:
             self._set_lora_address(master_id)
         self.message_fleet_transmit = "0:0"
-        self._last_fleet_receive_key = None
         self.get_logger().info(f"====== Switching to SERVER mode (ID {master_id}) ======")
         self.role = "server"
         self.auto_failover = False
@@ -803,10 +801,6 @@ class LoraRylr993Node(Node):
         return sent_ok
 
     def _publish_fleet_receive_from_lora(self, id_val: str, data_val: str):
-        key = f"{id_val.lower()}:{data_val}"
-        if key == self._last_fleet_receive_key:
-            return
-        self._last_fleet_receive_key = key
         outbound = String()
         outbound.data = json.dumps({"v": 2, "id": id_val.lower(), "d": data_val})
         self.publisher_.publish(outbound)
