@@ -796,6 +796,17 @@ class LoraRylr993Node(Node):
     def _fleet_payload(self) -> str:
         return self.message_fleet_transmit or "0:0"
 
+    def _flush_pending_fleet_payload(self, tx_tag: str) -> bool:
+        payload = self._fleet_payload()
+        if payload == "0:0":
+            return False
+        sent_ok = self.send_lora(payload, dest=0)
+        if sent_ok:
+            # One-shot fleet payload: clear after successful LoRa transmission.
+            self.message_fleet_transmit = "0:0"
+            self.get_logger().info(f"{tx_tag} fleet payload sent: {payload}")
+        return sent_ok
+
     def _publish_fleet_receive_from_lora(self, id_val: str, data_val: str):
         key = f"{id_val.lower()}:{data_val}"
         if key == self._last_fleet_receive_key:
@@ -875,9 +886,6 @@ class LoraRylr993Node(Node):
             beacon_payload = self._fleet_payload()
             if beacon_payload == "0:0":
                 beacon_payload = ""
-                self.get_logger().info(
-                    f"SERVER beacon frame={self.frame_id}: skip default fleet payload 0:0"
-                )
             beacon = make_beacon(
                 frame_id=self.frame_id,
                 uuid=self.my_uuid,
@@ -885,10 +893,11 @@ class LoraRylr993Node(Node):
                 offer_uuid=self.pending_offer_uuid,
                 offer_id=self.pending_offer_id,
             )
-            sent_ok = self.send_lora(beacon, dest=0)
-            if sent_ok and beacon_payload and beacon_payload != "0:0":
-                # One-shot fleet payload: clear after successful LoRa transmission.
+            beacon_sent_ok = self.send_lora(beacon, dest=0)
+            if beacon_sent_ok and beacon_payload:
+                # One-shot fleet payload in beacon: clear after successful TX.
                 self.message_fleet_transmit = "0:0"
+                self.get_logger().info(f"SERVER frame={self.frame_id} fleet payload sent in beacon: {beacon_payload}")
             master_id = int(self.get_parameter("master").value)
             self._update_peer_table(
                 master_id,
@@ -1164,16 +1173,12 @@ class LoraRylr993Node(Node):
 
         sleep_until(tx_time, busy_tail_s=busy_tail_s)
 
-        payload = self._fleet_payload()
-        if payload == "0:0":
+        if self._fleet_payload() == "0:0":
             self.get_logger().info(
                 f"TDMA payload skipped frame={frame}: fleet payload is default 0:0"
             )
             return
-        sent_ok = self.send_lora(payload)
-        if sent_ok:
-            # One-shot fleet payload: clear after successful LoRa transmission.
-            self.message_fleet_transmit = "0:0"
+        self._flush_pending_fleet_payload(f"CLIENT frame={frame}")
         after_ms = (time.monotonic() - beacon_rx_m) * 1000.0
         self.get_logger().info(
             f"TDMA payload sent frame={frame} after_beacon={after_ms:.1f}ms RSSI={rssi} SNR={snr}"
