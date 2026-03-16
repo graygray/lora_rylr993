@@ -4,7 +4,7 @@ import random
 import sys
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import rclpy
 from rclpy.logging import LoggingSeverity
@@ -360,6 +360,30 @@ class LoraConfig:
     tx_power: int = 22
 
 
+@dataclass
+class Stats:
+    n: int = 0
+    min_v: float = float("inf")
+    max_v: float = float("-inf")
+    sum_v: float = 0.0
+
+    def add(self, value: float):
+        self.n += 1
+        self.sum_v += value
+        if value < self.min_v:
+            self.min_v = value
+        if value > self.max_v:
+            self.max_v = value
+
+    def avg(self) -> float:
+        return self.sum_v / self.n if self.n else 0.0
+
+    def fmt(self) -> str:
+        if self.n == 0:
+            return "n=0"
+        return f"n={self.n} min={self.min_v:.1f}ms avg={self.avg():.1f}ms max={self.max_v:.1f}ms"
+
+
 class LoraRylr993Node(Node):
     def __init__(self, log_cli: bool = False, log_rx_cli: bool = False, log_calc_cli: bool = False):
         super().__init__("lora_rylr993_node")
@@ -396,6 +420,15 @@ class LoraRylr993Node(Node):
         self.pending_offer_uuid: Optional[str] = None
         self.pending_offer_id: Optional[int] = None
         self.pending_offer_ttl = 0
+        self.peer_table: Dict[int, Dict[str, Any]] = {}
+        self.per_expected: Dict[int, int] = {}
+        self.per_ok: Dict[int, int] = {}
+        self.per_mismatch: Dict[int, int] = {}
+        self.robot_order: Dict[int, int] = {}
+        self.slot_offset_stats: Dict[int, Stats] = {}
+        self.beacon_to_rx_stats: Dict[int, Stats] = {}
+        self.last_server_frame_start_mono = time.monotonic()
+        self.next_report_mono = time.monotonic() + float(self.get_parameter("report_interval_s").value)
         self.auto_id_registry: Dict[str, int] = {}
         self.last_heard_mono: Dict[int, float] = {}
         self.joined_at_frame: Dict[int, int] = {}
@@ -435,6 +468,9 @@ class LoraRylr993Node(Node):
         self.declare_parameter("tx_offset", 0.010)
         self.declare_parameter("frame", 0.0)  # <=0 means auto-calc
         self.declare_parameter("margin", 0.020)
+        self.declare_parameter("warmup", 10)
+        self.declare_parameter("report_interval_s", 10.0)
+        self.declare_parameter("peer_timeout_s", 5.0)
         self.declare_parameter("assumed_jitter_ms", 1.8)
         self.declare_parameter("rx_delay_ms", 166.0)
         self.declare_parameter("busy_tail_ms", 2.0)
@@ -586,8 +622,118 @@ class LoraRylr993Node(Node):
         self.pending_offer_uuid = None
         self.pending_offer_id = None
         self.pending_offer_ttl = 0
+        self._reset_server_stats()
         self._log_cfg(as_server=True)
         self.get_logger().info(f"Switched role -> SERVER (id={self.cfg.address})")
+
+    def _reset_server_stats(self):
+        robots = self._robot_list()
+        self.per_expected = {r: 0 for r in robots}
+        self.per_ok = {r: 0 for r in robots}
+        self.per_mismatch = {r: 0 for r in robots}
+        self.robot_order = {rid: i for i, rid in enumerate(sorted(robots))}
+        self.slot_offset_stats = {r: Stats() for r in robots}
+        self.beacon_to_rx_stats = {r: Stats() for r in robots}
+        self.last_heard_mono = {r: 0.0 for r in robots}
+        self.joined_at_frame = {r: -1 for r in robots}
+        self.peer_table = {}
+        self.last_server_frame_start_mono = time.monotonic()
+        self.next_report_mono = time.monotonic() + float(self.get_parameter("report_interval_s").value)
+
+    def _update_peer_table(
+        self,
+        peer_id: int,
+        *,
+        role: str,
+        x: int,
+        y: int,
+        heading: int,
+        status: int,
+        seq: int,
+        rssi: int,
+        snr: int,
+        src_addr: int,
+    ):
+        self.peer_table[peer_id] = {
+            "role": role,
+            "x": x,
+            "y": y,
+            "heading": heading,
+            "status": status,
+            "seq": seq,
+            "last_update_mono": time.monotonic(),
+            "rssi": rssi,
+            "snr": snr,
+            "src_addr": src_addr,
+        }
+
+    def _log_peer_table(self):
+        stale_timeout_s = float(self.get_parameter("peer_timeout_s").value)
+        robots = self._robot_list()
+        master_id = int(self.get_parameter("master").value)
+        self.get_logger().info("---- PEER TABLE ----")
+        now_m = time.monotonic()
+        id_set = set(self.peer_table.keys())
+        id_set.update(robots)
+        id_set.add(master_id)
+        if not id_set:
+            self.get_logger().info("(empty)")
+            self.get_logger().info("--------------------")
+            return
+        for peer_id in sorted(id_set):
+            peer = self.peer_table.get(peer_id)
+            if peer is None:
+                role = "master" if peer_id == master_id else "robot"
+                age = 9999.0
+                seq_text = "--"
+                x = y = heading = status_val = rssi = snr = 0
+            else:
+                role = str(peer["role"])
+                age = now_m - float(peer["last_update_mono"])
+                seq_val = peer.get("seq")
+                seq_text = f"{seq_val:02X}" if isinstance(seq_val, int) else "--"
+                x = int(peer["x"])
+                y = int(peer["y"])
+                heading = int(peer["heading"])
+                status_val = int(peer["status"])
+                rssi = int(peer["rssi"])
+                snr = int(peer["snr"])
+            stale = "STALE" if age > stale_timeout_s else "OK"
+            self.get_logger().info(
+                f"ID {peer_id:>3} [{role:^6}] x={x} y={y} hdg={heading} st={status_val} "
+                f"seq={seq_text} RSSI={rssi} SNR={snr} age={age:.1f}s {stale}"
+            )
+        self.get_logger().info("--------------------")
+
+    def _log_per_summary(self):
+        robots = self._robot_list()
+        master_id = int(self.get_parameter("master").value)
+        self.get_logger().info("====== PER SUMMARY ======")
+        total_ok = 0
+        total_expected = 0
+        for rid in robots:
+            if rid == master_id or self.joined_at_frame.get(rid, -1) == -1:
+                continue
+            expected = self.per_expected.get(rid, 0)
+            ok = self.per_ok.get(rid, 0)
+            per = (expected - ok) / expected if expected else 0.0
+            self.get_logger().info(
+                f"Robot {rid}: OK={ok}/{expected} PER={per*100:.3f}% mismatch={self.per_mismatch.get(rid, 0)}"
+            )
+            self.get_logger().info(f"  BEACON_TO_RX: {self.beacon_to_rx_stats.get(rid, Stats()).fmt()}")
+            self.get_logger().info(f"  SLOT_OFFSET : {self.slot_offset_stats.get(rid, Stats()).fmt()}")
+            total_ok += ok
+            total_expected += expected
+        global_per = 1.0 - (total_ok / total_expected) if total_expected else 0.0
+        self.get_logger().info(f"GLOBAL PER = {global_per*100:.3f}%")
+        self._log_peer_table()
+
+    def _maybe_log_server_reports(self, now_m: float):
+        interval_s = max(0.5, float(self.get_parameter("report_interval_s").value))
+        if now_m < self.next_report_mono:
+            return
+        self._log_per_summary()
+        self.next_report_mono = now_m + interval_s
 
     def _switch_to_client(self, auto_failover: bool):
         self.role = "client"
@@ -725,6 +871,7 @@ class LoraRylr993Node(Node):
                 self.next_frame_start += frame_dur
 
             self.frame_id = 1 if self.frame_id >= 9999 else self.frame_id + 1
+            self.last_server_frame_start_mono = time.monotonic()
             beacon_payload = self._fleet_payload()
             if beacon_payload == "0:0":
                 beacon_payload = ""
@@ -742,11 +889,31 @@ class LoraRylr993Node(Node):
             if sent_ok and beacon_payload and beacon_payload != "0:0":
                 # One-shot fleet payload: clear after successful LoRa transmission.
                 self.message_fleet_transmit = "0:0"
+            master_id = int(self.get_parameter("master").value)
+            self._update_peer_table(
+                master_id,
+                role="master",
+                x=int(self.get_parameter("x").value),
+                y=int(self.get_parameter("y").value),
+                heading=int(self.get_parameter("heading").value),
+                status=int(self.get_parameter("status").value),
+                seq=(self.frame_id % 256),
+                rssi=0,
+                snr=0,
+                src_addr=master_id,
+            )
+            warmup = int(self.get_parameter("warmup").value)
+            for rid in self._robot_list():
+                if rid == master_id:
+                    continue
+                if self.joined_at_frame.get(rid, -1) != -1 and self.frame_id > self.joined_at_frame[rid] + warmup:
+                    self.per_expected[rid] = self.per_expected.get(rid, 0) + 1
             if self.pending_offer_ttl > 0:
                 self.pending_offer_ttl -= 1
                 if self.pending_offer_ttl <= 0:
                     self.pending_offer_uuid = None
                     self.pending_offer_id = None
+            self._maybe_log_server_reports(now_m)
 
         elif self.role == "discovery_auto_role":
             if now_m > self.discovery_deadline_mono:
@@ -774,7 +941,7 @@ class LoraRylr993Node(Node):
             self._publish_fleet_receive_from_lora(id_val, data_val)
 
         if self.role == "server":
-            self._handle_server_rx(src, data)
+            self._handle_server_rx(src, data, rssi, snr)
             return
         if self.role == "client":
             self._handle_client_rx(src, data, rssi, snr)
@@ -788,7 +955,7 @@ class LoraRylr993Node(Node):
         if self.role == "auto_id":
             self._handle_auto_id_rx(data)
 
-    def _handle_server_rx(self, src: int, data: str):
+    def _handle_server_rx(self, src: int, data: str, rssi: int, snr: int):
         beacon = parse_beacon(data)
         if beacon is not None:
             other_uuid = beacon["uuid"]
@@ -817,7 +984,16 @@ class LoraRylr993Node(Node):
                     if now_m - self.last_heard_mono.get(reg_id, 0.0) > lease_timeout_s:
                         dead_uuids.append(reg_uuid)
                 for dead in dead_uuids:
-                    self.auto_id_registry.pop(dead, None)
+                    freed_id = self.auto_id_registry.pop(dead, None)
+                    if freed_id is None:
+                        continue
+                    self.per_expected[freed_id] = 0
+                    self.per_ok[freed_id] = 0
+                    self.per_mismatch[freed_id] = 0
+                    self.slot_offset_stats[freed_id] = Stats()
+                    self.beacon_to_rx_stats[freed_id] = Stats()
+                    self.joined_at_frame[freed_id] = -1
+                    self.last_heard_mono[freed_id] = 0.0
 
                 used_ids = set(self.auto_id_registry.values())
                 used_ids.add(int(self.get_parameter("master").value))
@@ -854,6 +1030,57 @@ class LoraRylr993Node(Node):
             self.last_heard_mono[src] = time.monotonic()
             if self.joined_at_frame.get(src, -1) == -1:
                 self.joined_at_frame[src] = self.frame_id
+            self._update_peer_table(
+                src,
+                role="robot",
+                x=int(pos["x"]),
+                y=int(pos["y"]),
+                heading=int(pos["heading"]),
+                status=int(pos["status"]),
+                seq=int(pos["seq"]),
+                rssi=rssi,
+                snr=snr,
+                src_addr=src,
+            )
+
+        robots = self._robot_list()
+        master_id = int(self.get_parameter("master").value)
+        if src not in robots or src == master_id:
+            return
+
+        slot_index = self.robot_order.get(src)
+        if slot_index is None:
+            return
+        t_ms = (time.monotonic() - self.last_server_frame_start_mono) * 1000.0
+        expected_ms = (
+            float(self.get_parameter("base_delay").value)
+            + slot_index * float(self.get_parameter("slot").value)
+            + float(self.get_parameter("tx_offset").value)
+        ) * 1000.0
+        slot_offset_ms = t_ms - expected_ms
+        self.slot_offset_stats.setdefault(src, Stats()).add(slot_offset_ms)
+        self.beacon_to_rx_stats.setdefault(src, Stats()).add(t_ms)
+
+        self.last_heard_mono[src] = time.monotonic()
+        if self.joined_at_frame.get(src, -1) == -1:
+            self.joined_at_frame[src] = self.frame_id
+
+        warmup = int(self.get_parameter("warmup").value)
+        if self.frame_id > self.joined_at_frame[src] + warmup:
+            self.per_ok[src] = self.per_ok.get(src, 0) + 1
+        if not (pos and pos["id"] == src):
+            self._update_peer_table(
+                src,
+                role="robot",
+                x=0,
+                y=0,
+                heading=0,
+                status=0,
+                seq=(self.frame_id % 256),
+                rssi=rssi,
+                snr=snr,
+                src_addr=src,
+            )
 
     def _handle_auto_id_rx(self, data: str):
         beacon = parse_beacon(data)
