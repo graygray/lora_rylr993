@@ -785,7 +785,7 @@ class LoraRylr993Node(Node):
         new_payload = f"{id_val}:{data_val}"
         self._last_fleet_transmit_rx = new_payload
         self.message_fleet_transmit = new_payload
-        self.get_logger().info(f"Parsed id={id_val}, data={data_val}")
+        # self.get_logger().info(f"Parsed id={id_val}, data={data_val}")
         self.get_logger().info(f"Updated message_fleet_transmit={self.message_fleet_transmit} for LoRa TX")
 
     def _fleet_payload(self) -> str:
@@ -799,7 +799,7 @@ class LoraRylr993Node(Node):
         if sent_ok:
             # One-shot fleet payload: clear after successful LoRa transmission.
             self.message_fleet_transmit = "0:0"
-            self.get_logger().info(f"{tx_tag} fleet payload sent: {payload}")
+            # self.get_logger().info(f"{tx_tag} fleet payload sent: {payload}")
         return sent_ok
 
     def _publish_fleet_receive_from_lora(self, id_val: str, data_val: str):
