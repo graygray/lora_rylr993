@@ -35,6 +35,9 @@ do_install:append() {
     if [ -f ${D}${bindir}/lora_rylr993_node ]; then
         ln -sf ${bindir}/lora_rylr993_node ${D}${libdir}/lora_rylr993/lora_rylr993_node
     fi
+
+    install -d ${D}${sysconfdir}/udev/rules.d
+    install -m 0644 ${S}/90-lora-uart.rules ${D}${sysconfdir}/udev/rules.d/90-lora-uart.rules
 }
 
 # Instruct Yocto to package the additional files we installed via setup.py and do_install.
@@ -42,4 +45,5 @@ FILES:${PN} += " \
     ${libdir}/lora_rylr993/lora_rylr993_node \
     ${datadir}/ament_index/resource_index/packages/lora_rylr993 \
     ${datadir}/lora_rylr993/package.xml \
+    ${sysconfdir}/udev/rules.d/90-lora-uart.rules \
 "
