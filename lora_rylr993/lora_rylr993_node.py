@@ -1,5 +1,6 @@
 import json
 import argparse
+import os
 import random
 import sys
 import time
@@ -15,6 +16,10 @@ try:
     import serial
 except ImportError:  # pragma: no cover - handled at runtime on target
     serial = None
+
+
+DEFAULT_LORA_PORT = "/dev/lora_uart"
+FALLBACK_LORA_PORT = "/dev/ttyUSB0"
 
 
 def parse_bw_to_code(bw: str) -> int:
@@ -349,7 +354,7 @@ def parse_fleet_payload(data: str) -> Optional[Tuple[str, str]]:
 
 @dataclass
 class LoraConfig:
-    port: str = "/dev/ttyUSB0"
+    port: str = DEFAULT_LORA_PORT
     baud: int = 9600
     address: int = 1
     band: int = 915000000
@@ -448,7 +453,7 @@ class LoraRylr993Node(Node):
         self.declare_parameter("log", bool(self._log_cli))
         self.declare_parameter("log_rx", bool(self._log_rx_cli))
         self.declare_parameter("log_calc", bool(self._log_calc_cli))
-        self.declare_parameter("port", "/dev/ttyUSB0")
+        self.declare_parameter("port", DEFAULT_LORA_PORT)
         self.declare_parameter("baud", 9600)
         self.declare_parameter("address", 1)
         self.declare_parameter("band", 915000000)
@@ -578,8 +583,15 @@ class LoraRylr993Node(Node):
         if serial is None:
             self.get_logger().error("pyserial is not installed; LoRa bridge is disabled.")
             return
+        serial_port = self.cfg.port
+        if serial_port == DEFAULT_LORA_PORT and not os.path.exists(serial_port):
+            serial_port = FALLBACK_LORA_PORT
+            self.get_logger().warning(
+                f"{DEFAULT_LORA_PORT} not found; falling back to {FALLBACK_LORA_PORT}"
+            )
         try:
-            self.ser = serial.Serial(self.cfg.port, self.cfg.baud, timeout=0.1)
+            self.ser = serial.Serial(serial_port, self.cfg.baud, timeout=0.1)
+            self.cfg.port = serial_port
             ok, detail = init_radio(self.ser, self.cfg, debug_raw_uart=self.debug_raw_uart)
             if ok:
                 self.get_logger().info(
