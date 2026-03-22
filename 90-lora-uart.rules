@@ -1,2 +1,2 @@
-# Stable LoRa UART alias for the Prolific USB-serial adapter.
-SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="23a3", ATTRS{serial}=="AFAOj19B616", SYMLINK+="lora_uart"
+# Stable LoRa UART alias for a Prolific USB-serial adapter.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="23a3", SYMLINK+="lora_uart"
